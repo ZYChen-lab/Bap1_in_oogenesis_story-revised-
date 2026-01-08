@@ -1,0 +1,255 @@
+---
+title: "250623_PcG_targets_L2C_analyses"
+output: html_notebook
+---
+
+
+Fig. 6f, S8h 
+
+### 1.Classify PcG at L2C
+
+Classify promoters with or without K27me3 at L2C
+
+#### 1.1 laod annotation
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+source("./utils.R")
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+
+mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf")
+
+mm10_genes <- genes(mm10_gene_annotation, )
+mm10_promoters <- promoters(mm10_genes, upstream = 2500, downstream = 2500)
+head(mm10_promoters)
+
+fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+PcG_df <- read_excel("./annotation/41556_2024_1553_MOESM2_ESM.xlsx", sheet = 3)
+head(PcG_df)
+nrow(PcG_df) #1688
+
+PcG_df <- fpkm[which(fpkm$name %in% PcG_df$Geneid), c("id", "name") ]
+head(PcG_df)
+nrow(PcG_df) #1681
+
+PcG_tss <- mm10_promoters[which(mm10_promoters$gene_id %in% PcG_df$id),]
+head(PcG_tss)
+length(PcG_tss) #1681
+
+#only keep PcG targests from chr1:19, removing chrX, Y, M
+PcG_tss <- keepSeqlevels(PcG_tss, c(paste0("chr", seq(1:19))), pruning.mode = "coarse")
+seqlevels(PcG_tss)
+length(PcG_tss) #1643
+```
+
+#### 1.2 Z-score normalization 
+```{r}
+# path1 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs"
+# path2 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs"
+# 
+# bw <- list(
+#   GV_CTR_K27me3 = paste0(path1, "/GV_CTR_K27me3_merged.bw"),
+#   GV_CKO_K27me3 = paste0(path1, "/GV_CKO_K27me3_merged.bw"),
+#   L2C_CTR_K27me3 = paste0(path2, "/CTR_L2C_K27me3.sorted_merged.bw"),
+#   L2C_CKO_K27me3 = paste0(path2, "/CKO_L2C_K27me3.sorted_merged.bw")
+# )
+# 
+# 
+# for(sample in names(bw)){
+#   cat(paste0(sample,"\n"))
+#   bw_file = bw[[sample]]
+#   # calcPeaksSignal is defined in the R/utils.R file.
+#   bw_list$sample <- import.bw(bw_file)
+# 
+#   #filter by blacklist
+#   tmp1 <- subsetByOverlaps(bw_list$sample, mm10_blacklist, invert = T)
+#   
+#   #calculate z score
+#   tmp1$score2 <- (tmp1$score - mean(tmp1$score)) / sd(tmp1$score)
+#   
+#   #output
+#   tmp2 <- tmp1
+#   mcols(tmp2)$score <- NULL
+#   names(mcols(tmp2)) <- "score"
+#   export(tmp2, con=paste0("./normalized_bw/", sample, "_normalized.bw"),
+#        format = "bigWig")
+}
+```
+
+
+#### 1.2 count K27me3 at PcG promoters
+
+```{r}
+path1 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs"
+path2 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs"
+
+bw <- list(
+  GV_CTR_K27me3 = paste0(path1, "/GV_CTR_K27me3_merged.bw"),
+  GV_CKO_K27me3 = paste0(path1, "/GV_CKO_K27me3_merged.bw"),
+  L2C_CTR_K27me3 = paste0(path2, "/CTR_L2C_K27me3.sorted_merged.bw"),
+  L2C_CKO_K27me3 = paste0(path2, "/CKO_L2C_K27me3.sorted_merged.bw")
+)
+
+# path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/normalized_bw"
+# 
+# bw <- list(
+#   GV_CTR_K27me3 = paste0(path, "/GV_CTR_K27me3_normalized.bw"),
+#   GV_CKO_K27me3 = paste0(path, "/GV_CKO_K27me3_normalized.bw"),
+#   L2C_CTR_K27me3 = paste0(path, "/L2C_CTR_K27me3_normalized.bw"),
+#   L2C_CKO_K27me3 = paste0(path, "/L2C_CKO_K27me3_normalized.bw")
+# )
+#count signals
+K27me3_mat <-  matrix(0, ncol= length(bw), nrow=length(PcG_tss))
+colnames(K27me3_mat) = names(bw)
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  K27me3_mat[,sample] = calcPeaksSignal(PcG_tss, bw_file)$meanScore
+}
+
+head(K27me3_mat)
+K27me3_df <- as.data.frame(K27me3_mat)
+K27me3_df$chr <- as.character(seqnames(PcG_tss))
+K27me3_df$start <- start(PcG_tss)
+K27me3_df$end <- end(PcG_tss)
+K27me3_df$id <- PcG_tss$gene_id
+K27me3_df <- left_join(K27me3_df, fpkm[, c("id", "name")], by = "id")
+nrow(K27me3_df) #1643
+saveRDS(K27me3_df, "./R_output/250623_PcG_targets_K27me3_GV_L2C.rds")
+```
+
+
+```{r}
+K27me3_df <- readRDS("./R_output/250623_PcG_targets_K27me3_GV_L2C.rds")
+K27me3_df <- as.data.frame(K27me3_mat)
+K27me3_df$chr <- as.character(seqnames(PcG_tss))
+K27me3_df$start <- start(PcG_tss)
+K27me3_df$end <- end(PcG_tss)
+K27me3_df$id <- PcG_tss$gene_id
+K27me3_df <- left_join(K27me3_df, fpkm[, c("id", "name")], by = "id")
+nrow(K27me3_df) #1643
+K27me3_df <- K27me3_df[order(K27me3_df$L2C_CTR_K27me3, decreasing = T),]
+rownames(K27me3_df) <- K27me3_df$id
+
+
+K27me3_retain <- K27me3_df[c(1:719),] #top 719 (fpkm > 2) selected as K27me3 retain
+
+K27me3_lost <- K27me3_df[c(720:nrow(K27me3_df)),]
+
+write.table(K27me3_retain[,c("chr", "start", "end", "name")], 
+            file = "./R_output/250623_PcG_retainK27me3_at_2C.bed",
+            sep = "\t",
+            quote = F, row.names = F, col.names = F)
+write.table(K27me3_lost[, c("chr", "start", "end", "name")],
+            file = "./R_output/250623_PcG_lostK27me3_at_2C.bed",
+            sep = "\t", row.names = F, col.names = F)
+
+```
+
+
+#metaplot
+```{bash}
+CTR_L2C_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3.sorted_merged.bw"
+CKO_L2C_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3.sorted_merged.bw"
+CTR_L2C_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac.sorted_merged.bw"
+CKO_L2C_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac.sorted_merged.bw"
+
+CTR_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_mat.sorted_merged.bw"
+CTR_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_pat.sorted_merged.bw"
+CKO_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_mat.sorted_merged.bw"
+CKO_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_pat.sorted_merged.bw"
+CTR_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_mat.sorted_merged.bw"
+CTR_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_pat.sorted_merged.bw"
+CKO_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_mat.sorted_merged.bw"
+CKO_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_pat.sorted_merged.bw"
+
+computeMatrix reference-point \
+        -S $CTR_K27ac $CKO_K27ac $CTR_L2C_K27ac  $CKO_L2C_K27ac $CTR_K27me3 $CKO_K27me3 $CTR_L2C_K27me3 $CKO_L2C_K27me3 \
+        -R 250625_L2C_enhancer_mm10.bed \
+        --referencePoint center \
+        -a 10000 -b 10000 \
+        --outFileName 250626.K27me3.K27ac.GV.L2C.mat.gz \
+        --sortRegions 'descend' \
+        --outFileNameMatrix 250626.K27me3.K27ac.GV.L2C.mat.matrix \
+        --missingDataAsZero  \
+        --sortUsingSamples 1
+
+for kmeans in 1
+do
+	plotHeatmap --matrixFile  250626.K27me3.K27ac.GV.L2C.mat.gz \
+            --outFileName  250626.K27me3.K27ac.GV.L2C.mat.kmeans${kmeans}.pdf \
+            --outFileSortedRegions 250626.K27me3.K27ac.GV.L2C.mat.matrix.kmeans${kmeans}.bed \
+            --kmeans $kmeans \
+	    --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 3 \
+            --zMax 15 15 15 15 20 20 20 20 
+done
+```
+
+```{r}
+meta <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250623_PcG_targets_GV_L2C/250623.K27me3.K27ac.GV.L2C.mat.K27me3retain.mean.matrix", header = T)
+
+dim(meta)
+colnames(meta) <- "mean"
+
+meta$group <- c(rep("GV_CTR_me", 2000), rep("GV_CKO_me", 2000),
+                       rep("CTR_me_mat", 2000), rep("CTR_me_pat", 2000),
+                       rep("CKO_me_mat", 2000), rep("CKO_me_pat", 2000),
+                    rep("GV_CTR_ac", 2000), rep("GV_CKO_ac", 2000),
+                       rep("CTR_ac_mat", 2000), rep("CTR_ac_pat", 2000),
+                       rep("CKO_ac_mat", 2000), rep("CKO_ac_pat", 2000))
+
+meta$bp <- c(rep(seq(1:2000), 12))
+
+GV_me <- meta[c(1:4000),]
+CTR_me_mat <- meta[c(4001:6000, 8001:10000),]
+CKO_me_pat <- meta[c(6001:8000, 10001:12000),]
+GV_ac <- meta[c(12001:16000),]
+CTR_ac_mat <- meta[c(16001:18000, 20001:22000),]
+CKO_ac_pat <- meta[c(18001:20000, 22001:24000),]
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+pdf("./figures/250623_PcG_targets_L2C_metaplot.pdf", width = 6, height = 4)
+# ggplot(GV_me, aes(x = bp, y = mean, color = group)) +
+#   geom_line() + ylim(c(0,20)) + 
+#   scale_color_manual(values = c("black", "grey")) +
+#   theme_cowplot(16) + ggtitle("GV K27me3")
+ggplot(CTR_me_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("L2C mat")
+ggplot(CKO_me_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("L2C pat")
+
+ggplot(CTR_ac_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("L2C mat")
+ggplot(CKO_ac_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("L2C pat")
+
+dev.off()
+```

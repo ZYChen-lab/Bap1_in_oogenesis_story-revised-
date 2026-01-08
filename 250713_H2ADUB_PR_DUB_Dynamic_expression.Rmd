@@ -1,0 +1,284 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Fig. 1d, Fig. S1
+### 1. H2ADUB polyA-RNAseq
+
+```{r}
+suppressMessages(library(readxl))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+
+PolyARNA <- read_xlsx("./R_input/Public_data/WeXie_NCB_41556_2022_928_MOESM3_ESM.xlsx",
+                      skip = 1)
+PolyARNA <- as.data.frame(PolyARNA)[c (1, 13:23)]
+colnames(PolyARNA) <- c("gene", "FGO", "LPI", "MII egg", 
+                       "PN3 zygote", "PN5 zygote", "Early 2-cell", "Late 2-cell",
+                       "4-cell", "8-cell", "ICM", "mESC")
+DUB <- c("Bap1", "Mysm1", "Usp3", "Usp12", 
+              "Usp46", "Usp16", "Usp21", "Usp22",
+              "Usp28", "Usp32", "Usp36")
+DUB_df <- PolyARNA[which(PolyARNA$gene %in% DUB),]
+rownames(DUB_df) <- DUB_df$gene
+DUB4htp <- as.matrix(log2(DUB_df[, c(2:ncol(DUB_df))] + 0.1))
+pdf("./figures/250611_H2ADUB_dynamics_polyARNA2.pdf", width = 8, height = 4)
+Heatmap(DUB4htp, 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(DUB4htp), c(0, 0.5, 0.99)), 
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+### 2. H2ADUB Ribo-seq (Xie lab)
+```{r}
+RiboSeq <- read_xlsx("./R_input/Public_data/WeXie_NCB_41556_2022_928_MOESM3_ESM.xlsx", 
+                     skip = 1)
+RiboSeq <- as.data.frame(RiboSeq)[, c(1:12)]
+colnames(RiboSeq) <- c("gene", "FGO", "LPI", "MII egg", 
+                       "PN3 zygote", "PN5 zygote", "Early 2-cell", "Late 2-cell",
+                       "4-cell", "8-cell", "ICM", "mESC")
+
+DUB <- c("Usp46", "Usp28", "Bap1", "Usp21", "Usp3", "Usp16",
+         "Mysm1", "Usp22", "Usp36", "Usp32", "Usp12")
+        
+DUB_df <- RiboSeq[which(RiboSeq$gene %in% DUB),]
+DUB_df <- DUB_df[c(3, 11, 5, 1, 10, 2, 7, 6, 9, 8, 4),]
+rownames(DUB_df) <- DUB_df$gene
+DUB4htp <- as.matrix(log2(DUB_df[, c(2:ncol(DUB_df))] + 0.1))
+pdf("./figures/250611_H2ADUB_dynamics_riboseq.pdf", width = 8, height = 4)
+Heatmap(DUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(DUB4htp), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+dev.off()
+```
+
+### 3. H2ADUB total RNAseq
+```{r}
+totalRNA <- read_xlsx("./R_input/Public_data/sciadv.abj3967_table_s2.xlsx", skip = 1, 
+                       sheet = 2)
+totalRNA <- as.data.frame(totalRNA)
+
+totalRNA$MII <- (totalRNA$MII_rep1 +  totalRNA$MII_rep2) / 2
+totalRNA$zygote <- (totalRNA$`1C_rep1` + totalRNA$`1C_rep2`) / 2
+totalRNA$twocell <- (totalRNA$`2C_rep1` + totalRNA$`2C_rep2`) / 2
+totalRNA$fourcell <- (totalRNA$`4C_rep1` + totalRNA$`4C_rep2`) / 2
+totalRNA$morula <- (totalRNA$Morula_rep1 + totalRNA$Morula_rep2) / 2
+totalRNA$blast <- (totalRNA$Blast_rep1 + totalRNA$Blast_rep2) / 2
+
+totalRNA <- totalRNA[, c(3, 16:21)]
+colnames(totalRNA) <- c("gene", "MII egg", "Zygote", "2-cell",
+                        "4-cell", "Morula", "Blastocyst")
+DUB <- c("Bap1", "Mysm1", "Usp3", "Usp12", 
+              "Usp46", "Usp16", "Usp21", "Usp22",
+              "Usp28", "Usp32", "Usp36")
+DUB_df <- totalRNA[which(totalRNA$gene %in% DUB),]
+
+DUB_df <- DUB_df[c(10, 3, 5, 9, 2, 11, 8, 6, 7, 1, 4),]
+rownames(DUB_df) <- DUB_df$gene
+DUB4htp <- as.matrix(log2(DUB_df[, c(2:ncol(DUB_df))] + 0.1))
+pdf("./figures/250611_H2ADUB_dynamics_totalRNA.pdf", width = 6, height = 4)
+Heatmap(DUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(DUB4htp), c(0, 0.5, 0.99)), 
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+### 4. H2ADUB Ribolace
+```{r}
+RiboLace <- read_xlsx("./R_input/Public_data/sciadv.abj3967_table_s2.xlsx", 
+                     skip = 1, sheet = 1)
+RiboLace <- as.data.frame(RiboLace)
+
+RiboLace$MII <- (RiboLace$MII_rep1 +  RiboLace$MII_rep2) / 2
+RiboLace$zygote <- (RiboLace$`1C_rep1` + RiboLace$`1C_rep2`) / 2
+RiboLace$twocell <- (RiboLace$`2C_rep1` + RiboLace$`2C_rep2`) / 2
+RiboLace$fourcell <- (RiboLace$`4C_rep1` + RiboLace$`4C_rep2`) / 2
+RiboLace$morula <- (RiboLace$Morula_rep1 + RiboLace$Morula_rep2) / 2
+RiboLace$blast <- (RiboLace$Blast_rep1 + RiboLace$Blast_rep2) / 2
+
+RiboLace <- RiboLace[, c(3, 16:21)]
+colnames(RiboLace) <- c("gene", "MII egg", "Zygote", "2-cell",
+                        "4-cell", "Morula", "Blastocyst")
+DUB <- c("Bap1", "Mysm1", "Usp3", "Usp12", 
+              "Usp46", "Usp16", "Usp21", "Usp22",
+              "Usp28", "Usp32", "Usp36")
+DUB_df <- RiboLace[which(RiboLace$gene %in% DUB),]
+        
+DUB_df <- DUB_df[c(10, 3, 5, 9, 2, 11, 8, 6, 7, 1, 4),]
+
+rownames(DUB_df) <- DUB_df$gene
+DUB4htp <- as.matrix(log2(DUB_df[, c(2:ncol(DUB_df))] + 0.1))
+pdf("./figures/250611_H2ADUB_dynamics_ribolace.pdf", width = 8, height = 4)
+Heatmap(DUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(DUB4htp), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+dev.off()
+```
+
+### 5. PR-DUB polyA RNA-seq
+
+```{r}
+suppressMessages(library(readxl))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+
+PolyARNA <- read_xlsx("./R_input/Public_data/WeXie_NCB_41556_2022_928_MOESM3_ESM.xlsx",
+                      skip = 1)
+PolyARNA <- as.data.frame(PolyARNA)[c (1, 13:23)]
+colnames(PolyARNA) <- c("gene", "FGO", "LPI", "MII egg", 
+                       "PN3 zygote", "PN5 zygote", "Early 2-cell", "Late 2-cell",
+                       "4-cell", "8-cell", "ICM", "mESC")
+PRDUB <- c("Bap1", "Asxl1", "Asxl2", "Asxl3",
+           "Lsd2", "Hcfc1", "Foxk1", "Foxk2", "Mbd5",
+           "Mbd6", "Ogt")
+PRDUB_df <- PolyARNA[which(PolyARNA$gene %in% PRDUB),]
+rownames(PRDUB_df) <- PRDUB_df$gene
+PRDUB4htp <- as.matrix(log2(PRDUB_df[, c(2:ncol(PRDUB_df))] + 0.1))
+
+pdf("./figures/250611_PRDUB_dynamics_polyARNA.pdf", width = 8, height = 4)
+Heatmap(PRDUB4htp, 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(PRDUB4htp), c(0, 0.5, 0.99)), 
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+### 6. PR-DUB Ribo-seq (Xie lab)
+```{r}
+RiboSeq <- read_xlsx("./R_input/Public_data/WeXie_NCB_41556_2022_928_MOESM3_ESM.xlsx", 
+                     skip = 1)
+RiboSeq <- as.data.frame(RiboSeq)[, c(1:12)]
+colnames(RiboSeq) <- c("gene", "FGO", "LPI", "MII egg", 
+                       "PN3 zygote", "PN5 zygote", "Early 2-cell", "Late 2-cell",
+                       "4-cell", "8-cell", "ICM", "mESC")
+
+PRDUB <- c("Bap1", "Asxl1", "Asxl2", "Asxl3",
+           "Lsd2", "Hcfc1", "Foxk1", "Foxk2", "Mbd5",
+           "Mbd6", "Ogt")
+        
+PRDUB_df <- RiboSeq[which(RiboSeq$gene %in% PRDUB),]
+PRDUB_df <- PRDUB_df[c(7, 10, 2, 5, 1, 9, 6, 3, 4, 8),]
+rownames(PRDUB_df) <- PRDUB_df$gene
+PRDUB4htp <- as.matrix(log2(PRDUB_df[, c(2:ncol(PRDUB_df))] + 0.1))
+pdf("./figures/250611_PRDUB_dynamics_riboseq.pdf", width = 8, height = 4)
+Heatmap(PRDUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(PRDUB4htp), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+dev.off()
+```
+
+### 7. PR-DUB total RNAseq
+```{r}
+totalRNA <- read_xlsx("./R_input/Public_data/sciadv.abj3967_table_s2.xlsx", skip = 1, 
+                       sheet = 2)
+totalRNA <- as.data.frame(totalRNA)
+
+totalRNA$MII <- (totalRNA$MII_rep1 +  totalRNA$MII_rep2) / 2
+totalRNA$zygote <- (totalRNA$`1C_rep1` + totalRNA$`1C_rep2`) / 2
+totalRNA$twocell <- (totalRNA$`2C_rep1` + totalRNA$`2C_rep2`) / 2
+totalRNA$fourcell <- (totalRNA$`4C_rep1` + totalRNA$`4C_rep2`) / 2
+totalRNA$morula <- (totalRNA$Morula_rep1 + totalRNA$Morula_rep2) / 2
+totalRNA$blast <- (totalRNA$Blast_rep1 + totalRNA$Blast_rep2) / 2
+
+totalRNA <- totalRNA[, c(3, 16:21)]
+colnames(totalRNA) <- c("gene", "MII egg", "Zygote", "2-cell",
+                        "4-cell", "Morula", "Blastocyst")
+
+PRDUB <- c("Bap1", "Asxl1", "Asxl2", "Asxl3",
+           "Lsd2", "Hcfc1", "Foxk1", "Foxk2", "Mbd5",
+           "Mbd6", "Ogt")
+
+PRDUB_df <- totalRNA[which(totalRNA$gene %in% PRDUB),]
+
+PRDUB_df <- PRDUB_df[c(1, 4, 8, 7, 5, 3, 6, 10, 2, 9),]
+rownames(PRDUB_df) <- PRDUB_df$gene
+
+PRDUB4htp <- as.matrix(log2(PRDUB_df[, c(2:ncol(PRDUB_df))] + 0.1))
+pdf("./figures/250611_PRDUB_dynamics_totalRNA.pdf", width = 6, height = 4)
+Heatmap(PRDUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(PRDUB4htp), c(0, 0.5, 0.99)), 
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+### 8. PR-DUB Ribolace
+```{r}
+RiboLace <- read_xlsx("./R_input/Public_data/sciadv.abj3967_table_s2.xlsx", 
+                     skip = 1, sheet = 1)
+RiboLace <- as.data.frame(RiboLace)
+
+RiboLace$MII <- (RiboLace$MII_rep1 +  RiboLace$MII_rep2) / 2
+RiboLace$zygote <- (RiboLace$`1C_rep1` + RiboLace$`1C_rep2`) / 2
+RiboLace$twocell <- (RiboLace$`2C_rep1` + RiboLace$`2C_rep2`) / 2
+RiboLace$fourcell <- (RiboLace$`4C_rep1` + RiboLace$`4C_rep2`) / 2
+RiboLace$morula <- (RiboLace$Morula_rep1 + RiboLace$Morula_rep2) / 2
+RiboLace$blast <- (RiboLace$Blast_rep1 + RiboLace$Blast_rep2) / 2
+
+RiboLace <- RiboLace[, c(3, 16:21)]
+colnames(RiboLace) <- c("gene", "MII egg", "Zygote", "2-cell",
+                        "4-cell", "Morula", "Blastocyst")
+PRDUB <- c("Bap1", "Asxl1", "Asxl2", "Asxl3",
+           "Lsd2", "Hcfc1", "Foxk1", "Foxk2", "Mbd5",
+           "Mbd6", "Ogt")
+PRDUB_df <- RiboLace[which(RiboLace$gene %in% PRDUB),]
+        
+PRDUB_df <- PRDUB_df[c(1, 4, 8, 7, 5, 3, 6, 10, 2, 9),]
+
+rownames(PRDUB_df) <- PRDUB_df$gene
+PRDUB4htp <- as.matrix(log2(PRDUB_df[, c(2:ncol(PRDUB_df))] + 0.1))
+
+pdf("./figures/250611_PRDUB_dynamics_ribolace.pdf", width = 8, height = 4)
+
+Heatmap(PRDUB4htp, 
+        cluster_rows=F, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(PRDUB4htp), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+dev.off()
+```

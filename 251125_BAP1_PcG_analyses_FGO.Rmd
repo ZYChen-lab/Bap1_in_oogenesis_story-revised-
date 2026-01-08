@@ -1,0 +1,1022 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Fig. 3a, 3c, 3d
+FIg. S4b-d
+
+## oocyte PcG targets
+#### 1. PcG targets
+
+Obtained from Wei Xie and Yitian's 2025 CSC paper
+```{r}
+suppressMessages(library(rtracklayer))
+suppressMessages(library(readxl))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+source("./utils.R")
+
+oocyte_PcG <- as.data.frame(read.table("./annotation/From_Yitian/Fig2_oocyte_PcG_name.txt"))
+head(oocyte_PcG)
+nrow(oocyte_PcG) #1700
+colnames(oocyte_PcG)[1] <- "name"
+
+#write.csv(rpkm, "./R_output/250315_BAP1_GV_to_L2C_fpkm.csv", quote = F, row.names = F)
+fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+fpkm$gv_ctr <- (fpkm$ctr_gv_1.rpkm + fpkm$ctr_gv_2.rpkm) / 2
+
+#fpkm > 0.5 active, fpkm < 0.5 inactive
+fpkm$group <- ifelse(fpkm$gv_ctr >=0.5, "active", "inactive")
+table(fpkm$group)
+
+oocyte_PcG <- merge(oocyte_PcG, fpkm[,c("id", "name", "group", "gv_ctr")], by = "name")
+nrow(oocyte_PcG) #1692
+
+oocyte_PcG <- oocyte_PcG[!duplicated(oocyte_PcG$name), ]
+
+nrow(oocyte_PcG) #1687
+
+oocyte_PcG <- oocyte_PcG[!isNA(oocyte_PcG$id), ]
+nrow(oocyte_PcG) #1687
+
+table(oocyte_PcG$group)
+#active inactive 
+#     247     1440
+```
+
+### 2. DeepTools Analyses 
+```{r}
+#get gene coordinates
+mm10_gene_bed <- import.bed("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.gene_boundary.bed")
+length(mm10_gene_bed)
+# mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf")
+# mm10_genes <- genes(mm10_gene_annotation)
+# 
+# #blacklist
+# mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+# length(mm10_blacklist) #3435
+# 
+# #filter non-standard chr and blacklist regions
+# mm10_genes <- mm10_genes[ !mm10_genes %over% mm10_blacklist]
+# mm10_genes <- keepSeqlevels(mm10_genes, paste0("chr", c(1:19, "X")),
+#                             pruning.mode = "coarse")
+# 
+# length(mm10_genes) #50016
+
+mm10_oocyte_PcG <- mm10_gene_bed[which(mm10_gene_bed$name %in%
+                                       oocyte_PcG$name)]
+length(mm10_oocyte_PcG) #1564
+
+write.table(
+  data.frame(seqnames = seqnames(mm10_oocyte_PcG),
+             starts = start(mm10_oocyte_PcG - 1),
+             ends = end(mm10_oocyte_PcG),
+             name = mm10_oocyte_PcG$name,
+             score = mm10_oocyte_PcG$score,
+             strand = strand(mm10_oocyte_PcG)), 
+  file = "./Deeptools/251125_oocyte_PcG_FGO/251125_oocyte_PcG.bed", 
+  quote = F, sep = "\t", row.names = F, col.names = F
+)
+```
+
+refer to /Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/251125_oocyte_PcG_FGO/
+```{bash}
+CTR_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/GV_CTR_H2Aub_merged.bw"
+CKO_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw"
+CTR_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/BAP1_GV_CTR_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"
+CKO_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/BAP1_GV_CKO_K27me3_rep2_scaled.bw"
+CTR_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/CTR_K27ac_rep3_4_merged.bw"
+CKO_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/CKO_K27ac_rep3_4_scaled.bw"
+
+computeMatrix reference-point \
+        -S $CTR_H2Aub $CKO_H2Aub $CTR_K27ac $CKO_K27ac $CTR_K27me3 $CKO_K27me3 \
+        -R 251125_oocyte_PcG.bed \
+        --referencePoint TSS \
+        -a 10000 -b 10000 \
+        --outFileName 251125.H2Aub.K27me3.K27ac.GV.PcG.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel  'C_H2Aub' 'K_H2Aub' 'C_K27ac' 'K_K27ac' 'C_K27me3' 'K_K27me3'  \
+        --outFileNameMatrix  251125.H2Aub.K27me3.K27ac.GV.PcG.matrix \
+        --missingDataAsZero \
+        --sortUsingSamples 5
+
+plotHeatmap --matrixFile 251125.H2Aub.K27me3.K27ac.GV.PcG.mat.gz \
+            --outFileName 251125.H2Aub.K27me3.K27ac.GV.mat.PcG.pdf \
+            --outFileSortedRegions 251125.H2Aub.K27me3.K27ac.GV.mat.PcG.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 5 \
+            --zMax 20 20 10 10 30 30
+```
+
+##### 2.1 metaplot
+```{r}
+library(ggplot2)
+library(cowplot)
+
+PcG <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/251125_oocyte_PcG_FGO/251125.H2Aub.K27me3.K27ac.GV.PcG.mean.matrix", header = T)
+
+colnames(PcG) <- "mean"
+
+
+PcG$group <- c(rep("C_H2Aub", 2000), rep("K_H2Aub", 2000),
+               rep("C_K27ac", 2000), rep("K_K27ac", 2000),
+               rep("C_K27me3", 2000), rep("K_K27me3", 2000))
+
+PcG$bp <- rep(seq(1:2000), 6)
+
+H2Aub_df <- PcG[c(1:4000),]
+K27ac_df <- PcG[c(4001:8000),]
+K27me3_df <- PcG[c(8001:12000),]
+
+
+#Fig. 3a in manuscript
+pdf("./figures/251125_H2Aub_K27me3_K27ac_over_oocyte_PcG_metaplot.pdf", width = 6, height = 4)
+ggplot(H2Aub_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,20)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+ggplot(K27ac_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,5)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+ggplot(K27me3_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,20)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+dev.off()
+```
+
+### 3. PRC1/2 DEG vs BAP1
+
+```{r}
+BAP1_gv_RNA  <- read.csv("./R_output/250315_BAP1_gv_genes_DE_analyses.csv")
+nrow(BAP1_gv_RNA) #20540
+
+BAP1_up <- BAP1_gv_RNA[which(BAP1_gv_RNA$gv_DESeq_rpkm.group == "up-regulated"),]
+BAP1_down <- BAP1_gv_RNA[which(BAP1_gv_RNA$gv_DESeq_rpkm.group == "down-regulated"),]
+BAP1_up_pcg <- BAP1_up[which(BAP1_up$id %in% oocyte_PcG$id),]
+
+nrow(BAP1_up) #101
+nrow(BAP1_down) #827
+nrow(BAP1_up_pcg) #7
+
+PRC1_gv_RNA <- read.csv("./R_output/250325_PRC1_gv_genes_DE_analyses.csv")
+nrow(PRC1_gv_RNA) #24992
+
+PRC1_up <- PRC1_gv_RNA[which(PRC1_gv_RNA$DESeq_rpkm.group == "down-regulated"),]
+PRC1_down <- PRC1_gv_RNA[which(PRC1_gv_RNA$DESeq_rpkm.group == "up-regulated"),]
+PRC1_up_pcg <- PRC1_up[which(PRC1_up$id %in% oocyte_PcG$id),]
+
+nrow(PRC1_up) #2417
+nrow(PRC1_down) #700
+nrow(PRC1_up_pcg) #479
+
+PRC2_gv_RNA <- read.csv("./R_output/250613_PRC2_gv_genes_DE_analyses.csv")
+nrow(PRC2_gv_RNA) #26147
+
+PRC2_up <- PRC2_gv_RNA[which(PRC2_gv_RNA$DESeq_rpkm.group == "up-regulated"),]
+PRC2_down <- PRC2_gv_RNA[which(PRC2_gv_RNA$DESeq_rpkm.group == "down-regulated"),]
+PRC2_up_pcg <- PRC2_up[which(PRC2_up$id %in% oocyte_PcG$id),]
+
+nrow(PRC2_up) #414
+nrow(PRC2_down) #67
+nrow(PRC2_up_pcg) #83
+
+suppressMessages(library(VennDiagram))
+suppressMessages(library(ggsci))
+suppressMessages(library(eulerr))
+
+#fig S4c in manuscript
+pdf("./figures/251125_BAP1_PRCs_RNA_overlap_venn.pdf", width = 5, height = 5)
+plot(
+  euler(
+    list(
+      "BAP1 (Down)" = unique(BAP1_down$id),
+      "PRC1 (Down)" = unique(PRC1_down$id),
+      "PRC2 (Down)" = unique(PRC2_down$id)
+    ), 
+    shape = "ellipse", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (Down)" = unique(BAP1_down$id),
+      "PRC1 (Down)" = unique(PRC1_down$id),
+      "PRC2 (Down)" = unique(PRC2_down$id)
+    )))
+
+plot(
+  euler(
+    list(
+      "BAP1 (up)" = unique(BAP1_up$id),
+      "PRC1 (up)" = unique(PRC1_up$id),
+      "PRC2 (up)" = unique(PRC2_up$id)
+    ), 
+    shape = "circle", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (up)" = unique(BAP1_up$id),
+      "PRC1 (up)" = unique(PRC1_up$id),
+      "PRC2 (up)" = unique(PRC2_up$id)
+    )))
+dev.off()
+
+#fig 3c in manuscript
+pdf("./figures/251125_BAP1_PRCs_PcGup_overlap_venn.pdf", width = 5, height = 5)
+plot(
+  euler(
+    list(
+      "BAP1 (PcG up)" = unique(BAP1_up_pcg$id),
+      "PRC1 (PcG up)" = unique(PRC1_up_pcg$id),
+      "PRC2 (PcG up)" = unique(PRC2_up_pcg$id)
+    ), 
+    shape = "circle", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (PcG up)" = unique(BAP1_up_pcg$id),
+      "PRC1 (PcG up)" = unique(PRC1_up_pcg$id),
+      "PRC2 (PcG up)" = unique(PRC2_up_pcg$id)
+    )))
+dev.off()
+```
+
+### 4. PcG up heatmap
+```{r}
+#PcG genes up in PRC1, PRC2, or PR-DUB KO oocytes
+PcG_up <- unique(c(PRC1_up_pcg$id, 
+                   PRC2_up_pcg$id,
+                   BAP1_up_pcg$id))
+length(PcG_up) #495
+
+bap1_fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+prc1_fpkm <- read.csv("./R_output/250616_PRC1_GV_RNA_fpkm.csv")
+prc2_fpkm <- read.csv("./R_output/250616_PRC2_GV_RNA_fpkm.csv")
+#need to use the original FPKM (do a FPKM change)
+
+bap1_fpkm$bap1_ctr_mean <- (bap1_fpkm$ctr_gv_1.rpkm + bap1_fpkm$ctr_gv_2.rpkm) / 2
+bap1_fpkm$bap1_cko_mean <- (bap1_fpkm$cko_gv_1.rpkm + bap1_fpkm$cko_gv_2.rpkm + 
+                            bap1_fpkm$cko_gv_3.rpkm) / 3
+
+prc1_fpkm$prc1_ctr_mean <- (prc1_fpkm$CKO_RNA1.rpkm + prc1_fpkm$CKO_RNA2.rpkm +
+                            prc1_fpkm$CKO_RNA3.rpkm) / 3
+prc1_fpkm$prc1_cko_mean <- (prc1_fpkm$CTR_RNA1.rpkm + prc1_fpkm$CTR_RNA2.rpkm + 
+                            prc1_fpkm$CTR_RNA3.rpkm) / 3
+
+prc2_fpkm$prc2_ctr_mean <- (prc2_fpkm$PRC2_CTR_RNA1.rpkm + prc2_fpkm$PRC2_CTR_RNA2.rpkm + 
+                            prc2_fpkm$PRC2_CTR_RNA3.rpkm) / 3
+prc2_fpkm$prc2_cko_mean <- (prc2_fpkm$PRC2_CKO_RNA1.rpkm + prc2_fpkm$PRC2_CKO_RNA2.rpkm +
+                            prc2_fpkm$PRC2_CKO_RNA3.rpkm) / 3
+
+df4htp1 <- bap1_fpkm[which(bap1_fpkm$id %in% PcG_up),
+                    c("id", "name", "bap1_ctr_mean", "bap1_cko_mean")]
+df4htp1$bap1_fc <- log2(df4htp1$bap1_cko_mean + 0.01) - 
+                   log2(df4htp1$bap1_ctr_mean + 0.01)
+
+nrow(df4htp1) #495
+Heatmap(as.matrix(log2(df4htp1[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp1[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+df4htp2 <- prc1_fpkm[which(prc1_fpkm$id %in% PcG_up),
+                     c("id", "name", "prc1_ctr_mean", "prc1_cko_mean")]
+df4htp2$prc1_fc <- log2(df4htp2$prc1_cko_mean + 0.01) -
+                   log2(df4htp2$prc1_ctr_mean + 0.01)
+nrow(df4htp2) #495
+
+Heatmap(as.matrix(log2(df4htp2[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp2[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+df4htp3 <- prc2_fpkm[which(prc2_fpkm$id %in% PcG_up),
+                     c("id", "name", "prc2_ctr_mean", "prc2_cko_mean")]
+df4htp3$prc2_fc <- log2(df4htp3$prc2_cko_mean + 0.01) -
+                   log2(df4htp3$prc2_ctr_mean + 0.01)
+nrow(df4htp3) #539
+
+Heatmap(as.matrix(log2(df4htp3[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp3[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+
+
+df4htp <- cbind(df4htp1,
+                df4htp2[, c(3:5)],
+                df4htp3[, c(3:5)])
+head(df4htp)
+
+# Heatmap(as.matrix(df4htp[, c(2:4)]), 
+#         cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+#         cluster_row_slices=F, border='black', column_names_rot = 45,
+#         row_names_gp = gpar(fontface = "italic"),
+#         row_title_rot=0, 
+#         row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+#         heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+#         #col=colorRamp2(quantile(as.matrix(df4htp[, c(2:4)]), c(0, 0.5, 0.99)), 
+#         col=colorRamp2(c(-5, 0, 5),
+#         c("#507BA9", "white", "#C74236")))
+
+df4htp_bap1only <- df4htp[which(df4htp$name %in% BAP1_up_pcg$name),]
+row.names(df4htp_bap1only) <- df4htp_bap1only$name
+mat <- as.matrix(df4htp_bap1only[, c("bap1_fc", "prc1_fc", "prc2_fc")])
+mat2 <- as.matrix(df4htp_bap1only[, c("bap1_ctr_mean", "bap1_cko_mean",
+                                      "prc1_ctr_mean", "prc1_cko_mean",
+                                      "prc2_ctr_mean", "prc2_cko_mean")])
+pdf("./figures/251125_PcG_PRC_BAP1_htp.pdf", width = 6, height = 4)
+Heatmap(mat, 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2FC"),
+        #col=colorRamp2(quantile(as.matrix(df4htp[, c(2:4)]), c(0, 0.5, 0.99)), 
+        col=colorRamp2(c(-4, 0, 4),
+        c("#507BA9", "white", "#C74236")))
+
+#Fig 3d in manuscript
+Heatmap(log2(mat2+0.01), 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2FPKM"),
+        col=colorRamp2(quantile(log2(mat2+0.01), c(0, 0.5, 0.99)), 
+        #col=colorRamp2(c(-4, 0, 4),
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+## ESC PcG targets
+### 1. PcG targets
+
+Download from Azusa's 2024 NCB paper
+```{r}
+suppressMessages(library(rtracklayer))
+suppressMessages(library(readxl))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+source("./utils.R")
+
+# mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf")
+
+PcG_df <- read_excel("./annotation/41556_2024_1553_MOESM2_ESM.xlsx", sheet = 3)
+head(PcG_df)
+nrow(PcG_df) #1688
+
+write.table(PcG_df[, c(1:4)], file = "./R_output/Inoue_PcG_genes.bed", sep = "\t",
+            quote = F, row.names = F, col.names = F)
+colnames(PcG_df)[4] <- "name"
+
+#write.csv(rpkm, "./R_output/250315_BAP1_GV_to_L2C_fpkm.csv", quote = F, row.names = F)
+fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+fpkm$gv_ctr <- (fpkm$ctr_gv_1.rpkm + fpkm$ctr_gv_2.rpkm) / 2
+
+#fpkm > 0.5 active, fpkm < 0.5 inactive
+fpkm$group <- ifelse(fpkm$gv_ctr >=0.5, "active", "inactive")
+table(fpkm$group)
+
+PcG_df <- left_join(PcG_df[, c("chr", "start", "end", "name")], fpkm[, c("id", "name", "group", "gv_ctr")], by = "name")
+nrow(PcG_df) #1692
+
+PcG_df <- PcG_df[!duplicated(PcG_df$name), ]
+
+nrow(PcG_df) #1688
+
+
+PcG_df <- PcG_df[!isNA(PcG_df$id), ]
+nrow(PcG_df) #1677
+
+table(PcG_df$group)
+#active inactive 
+#     555     1122 
+```
+
+### 2. DeepTools Analyses 
+```{r}
+write.table(
+  PcG_df[which(PcG_df$group == "active"), 
+         c("chr", "start", "end")], 
+  file = "./Deeptools/250424_PcG_targets_GV/250324_PcG_active.bed", 
+  quote = F, sep = "\t", row.names = F, col.names = F
+)
+
+write.table(
+  PcG_df[which(PcG_df$group == "inactive"), 
+         c("chr", "start", "end")], 
+  file = "./Deeptools/250424_PcG_targets_GV/250324_PcG_inactive.bed", 
+  quote = F, sep = "\t", row.names = F, col.names = F
+)
+
+write.table(
+  PcG_df[, c("chr", "start", "end")], 
+  file = "./Deeptools/250424_PcG_targets_GV/250324_PcG_all.bed", 
+  quote = F, sep = "\t", row.names = F, col.names = F
+)
+```
+
+refer to /Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250424_PcG_targets_GV/
+```{bash}
+CTR_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_H2Aub_merged.bw"
+CKO_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw"
+CTR_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27me3_merged.bw"
+CKO_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27me3_merged.bw"
+CTR_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27ac_merged.bw"
+CKO_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27ac_merged.bw"
+
+computeMatrix reference-point \
+        -S $CTR_H2Aub $CKO_H2Aub $CTR_K27ac $CKO_K27ac $CTR_K27me3 $CKO_K27me3 \
+        -R 250324_PcG_all.bed \
+        --referencePoint center \
+        -a 10000 -b 10000 \
+        --outFileName 250324.H2Aub.K27me3.K27ac.GV.PcG.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel  'C_H2Aub' 'K_H2Aub' 'C_K27ac' 'K_K27ac' 'C_K27me3' 'K_K27me3'  \
+        --outFileNameMatrix  250324.H2Aub.K27me3.K27ac.GV.PcG.matrix \
+        --missingDataAsZero \
+        --sortUsingSamples 5
+        
+plotHeatmap --matrixFile 250324.H2Aub.K27me3.K27ac.GV.PcG.mat.gz \
+            --outFileName 250324.H2Aub.K27me3.K27ac.GV.mat.PcG.pdf \
+            --outFileSortedRegions 250324.H2Aub.K27me3.K27ac.GV.mat.PcG.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 5 \
+            --zMax 20 20 10 10 30 30
+```
+
+#### 2.1 metaplot
+
+H2Aub/K27ac/K27me3 over PcG
+```{r}
+PcG <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/251125_ESC_PcG_targets_GV/251125.H2Aub.K27me3.K27ac.GV.PcG.mean.matrix", header = T)
+
+colnames(PcG) <- "mean"
+
+
+PcG$group <- c(rep("C_H2Aub", 2000), rep("K_H2Aub", 2000),
+               rep("C_K27ac", 2000), rep("K_K27ac", 2000),
+               rep("C_K27me3", 2000), rep("K_K27me3", 2000))
+
+PcG$bp <- rep(seq(1:2000), 6)
+
+H2Aub_df <- PcG[c(1:4000),]
+K27ac_df <- PcG[c(4001:8000),]
+K27me3_df <- PcG[c(8001:12000),]
+
+#Fig. 3a in manuscript
+pdf("./figures/251125_H2Aub_K27me3_K27ac_over_ESC_PcG_metaplot.pdf", width = 6, height = 4)
+ggplot(H2Aub_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,20)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+ggplot(K27ac_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,5)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+ggplot(K27me3_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+dev.off()
+```
+
+
+### 3. BAP1 DEG vs. PcG
+
+```{r}
+gv_RNA  <- read.csv("./R_output/250315_BAP1_gv_genes_DE_analyses.csv")
+nrow(gv_RNA) #20540
+
+gv_up <- gv_RNA[gv_RNA$gv_DESeq_rpkm.group == "up-regulated", ]
+gv_down <- gv_RNA[gv_RNA$gv_DESeq_rpkm.group == "down-regulated",]
+
+nrow(gv_up) #101
+nrow(gv_down) #827
+
+`%nin%` = Negate(`%in%`)
+BAP1_gv <- data.frame(
+  group = c("up", "up", "down", "down"),
+  group2 = c("PcG", "nonPcG", "PcG", "nonPcG"),
+  value = c(
+    nrow(gv_up[which(gv_up$id %in% PcG_df$id),]),
+    nrow(gv_up[which(gv_up$id %nin% PcG_df$id),]),
+    nrow(gv_down[which(gv_down$id %in% PcG_df$id),]),
+    nrow(gv_down[which(gv_down$id %nin% PcG_df$id),])
+  )
+)
+library(ggplot2)
+library(cowplot)
+pdf("./figures/20250324_BAP1_gv_DEGvsPcG.pdf", 
+    width = 6, height = 5)
+ggplot(BAP1_gv, aes(x = group, y = value, fill = group2)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +  # "fill" scales bars to 100%
+  scale_y_continuous(labels = scales::percent_format()) +  # Convert y-axis to percentages
+  labs(title = "Stacked Bar Plot (100%)",
+       x = "Group",
+       y = "Percentage",
+       fill = "Group2") +
+  scale_fill_manual(values = c("PcG" = "black", "nonPcG" = "white")) + 
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank())
+dev.off()
+```
+
+### 4. PRC1 DEG 
+
+#### 4.1 DEG analyses
+
+```{r}
+#Sample info
+sampleName <- c("CTR_RNA1", "CTR_RNA2", "CTR_RNA3",
+                "CKO_RNA1", "CKO_RNA2", "CKO_RNA3")
+
+simpleName <- sampleName
+
+#input data
+input_path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/"
+counts <- inputTEcountfiles(sampleName, paste0(simpleName, ".count"), 
+                            countDataPath = paste0(input_path ,"R_input/PRC1_KO_GV_RNA/"))
+
+rpkm <- inputStringTieRPKMfiles(sampleName, paste0(simpleName, ".rpkm"),
+                                RPKMDataPath = paste0(input_path, "R_input/PRC1_KO_GV_RNA/"))
+
+write.csv(rpkm, "./R_output/250616_PRC1_GV_RNA_fpkm.csv", quote = F, row.names = F)
+
+foldchange <- 2
+FPKMcutoff <- 0.5
+row.names(counts) <- counts$id
+
+suppressMessages(
+  DESeq <- countsToDEseq2FDR(counts = counts[, c("CTR_RNA1.count", "CTR_RNA2.count", "CTR_RNA3.count",
+                                                 "CKO_RNA1.count", "CKO_RNA2.count", "CKO_RNA3.count")], 
+                                 CGroup = 3, TGroup = 3)
+)
+
+DESeq_rpkm <- merge(DESeq[, c("id", 
+                              "CTR_RNA1.count", "CTR_RNA2.count", "CTR_RNA3.count",
+                              "CKO_RNA1.count", "CKO_RNA2.count", "CKO_RNA3.count",
+                                    "log2FoldChange", "padj")],
+                       rpkm[, c("id", "name",
+                                "CTR_RNA1.rpkm", "CTR_RNA2.rpkm", "CTR_RNA3.rpkm",
+                                "CKO_RNA1.rpkm", "CKO_RNA2.rpkm", "CKO_RNA3.rpkm")],
+                       by = "id")
+
+DESeq_rpkm$padj[is.na(DESeq_rpkm$padj)] <- 1
+
+DESeq_rpkm.group <- classifyDEG(
+                            DESeq_rpkm,
+                            ctr.rpkm = c("CTR_RNA1.rpkm", "CTR_RNA2.rpkm", "CTR_RNA3.rpkm"),
+                            trt.rpkm = c("CKO_RNA1.rpkm", "CKO_RNA2.rpkm", "CKO_RNA3.rpkm"),
+                            FDR.col = "padj", log2FC.col = "log2FoldChange",
+                            RPKM = FPKMcutoff, log2FC = log2(foldchange), FDR = 0.05)
+
+DESeq_rpkm <- cbind(DESeq_rpkm, DESeq_rpkm.group)
+
+DESeq_rpkm.up <- DESeq_rpkm[DESeq_rpkm.group == "up-regulated",]
+DESeq_rpkm.down <- DESeq_rpkm[DESeq_rpkm.group == "down-regulated",]
+DESeq_rpkm.detectable <- DESeq_rpkm[DESeq_rpkm.group != "low_expression_level",]
+
+Fpkm = 0.5
+nrow(DESeq_rpkm.up) #700
+nrow(DESeq_rpkm.down) #2417
+nrow(DESeq_rpkm.detectable) #115945
+
+DESeq_rpkm[DESeq_rpkm$name == "Rnf2",]
+# I think that the CTR should be KO, and KO should be CTR given the Rnf2 expression level.
+
+write.table(DESeq_rpkm, "./R_output/250325_PRC1_gv_genes_DE_analyses.csv",
+            quote = F, sep = ",", row.names = F)
+
+DESeq_rpkm$log2CTR <- log2(
+  (DESeq_rpkm$CTR_RNA1.count + DESeq_rpkm$CTR_RNA2.count + DESeq_rpkm$CTR_RNA3.count ) /3 + 1)
+
+DESeq_rpkm$log2CKO <- log2(
+  (DESeq_rpkm$CKO_RNA1.count + DESeq_rpkm$CKO_RNA2.count + DESeq_rpkm$CKO_RNA3.count) / 3 + 1)
+
+#switch the label (CTR vs. CKO, up vs. down) here 
+DESeq_rpkm.up.label <- paste0("Up-regulated:\n", nrow(DESeq_rpkm.down),
+                                 " (", format(round(nrow(DESeq_rpkm.down)/nrow(DESeq_rpkm.detectable)*100, 2), nsmall = 2), "%)")
+DESeq_rpkm.down.label <- paste0("Down-regulated:\n", nrow(DESeq_rpkm.up),
+                                 " (", format(round(nrow(DESeq_rpkm.up)/nrow(DESeq_rpkm.detectable)*100, 2), nsmall = 2), "%)")
+
+#Fig. S4b in manuscript
+pdf("./figures/250325_PRC1_gv_genes_DE_scatterplot.pdf", width = 6, height = 5)
+ggScatterplot(DESeq_rpkm, x = "log2CKO", y = "log2CTR",
+                       group = "DESeq_rpkm.group", gene = "name", xlab = "CTR",
+                       ylab = "PRC1 KO",
+                       title = "GV (genes)",
+                       label.up = DESeq_rpkm.up.label,
+                       label.down = DESeq_rpkm.down.label,
+                       genes4Label = c(
+                         "Rnf2"
+                         ),
+                       FC.line = foldchange,
+                       my.color=c("red3", "grey50", "grey50","blue"))
+dev.off()
+```
+
+##### 4.2 DEG vs. PcG
+
+```{r}
+nrow(DESeq_rpkm.up) #700
+nrow(DESeq_rpkm.down) #2417
+
+
+`%nin%` = Negate(`%in%`)
+PRC1_gv <- data.frame(
+  group = c("up", "up", "down", "down"),
+  group2 = c("PcG", "nonPcG", "PcG", "nonPcG"),
+  value = c(
+    nrow(DESeq_rpkm.down[which(DESeq_rpkm.down$id %in% PcG_df$id),]),
+    nrow(DESeq_rpkm.down[which(DESeq_rpkm.down$id %nin% PcG_df$id),]),
+    nrow(DESeq_rpkm.up[which(DESeq_rpkm.up$id %in% PcG_df$id),]),
+    nrow(DESeq_rpkm.up[which(DESeq_rpkm.up$id %nin% PcG_df$id),])
+  )
+)
+library(ggplot2)
+library(cowplot)
+pdf("./figures/250324_PRC1_gv_DEGvsPcG.pdf", 
+    width = 6, height = 5)
+ggplot(PRC1_gv, aes(x = group, y = value, fill = group2)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +  # "fill" scales bars to 100%
+  scale_y_continuous(labels = scales::percent_format()) +  # Convert y-axis to percentages
+  labs(title = "Stacked Bar Plot (100%)",
+       x = "Group",
+       y = "Percentage",
+       fill = "Group2") +
+  scale_fill_manual(values = c("PcG" = "black", "nonPcG" = "white")) + 
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank())
+dev.off()
+```
+### 5. PRC2 DEG
+
+```{r}
+#Sample info
+sampleName <- c("PRC2_CTR_RNA1", "PRC2_CTR_RNA2", "PRC2_CTR_RNA3",
+                "PRC2_CKO_RNA1", "PRC2_CKO_RNA2", "PRC2_CKO_RNA3")
+
+simpleName <- sampleName
+
+#input data
+input_path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/"
+counts <- inputTEcountfiles(sampleName, paste0(simpleName, ".count"), 
+                            countDataPath = paste0(input_path ,"R_input/PRC2_KO_GV_RNA/"))
+
+rpkm <- inputStringTieRPKMfiles(sampleName, paste0(simpleName, ".rpkm"),
+                                RPKMDataPath = paste0(input_path, "R_input/PRC2_KO_GV_RNA/"))
+
+write.csv(rpkm, "./R_output/250616_PRC2_GV_RNA_fpkm.csv", quote = F, row.names = F)
+
+foldchange <- 2
+FPKMcutoff <- 0.5
+row.names(counts) <- counts$id
+
+suppressMessages(
+  DESeq <- countsToDEseq2FDR(counts = counts[, c("PRC2_CTR_RNA1.count", 
+                                                 "PRC2_CTR_RNA2.count", "PRC2_CTR_RNA3.count",
+                                                 "PRC2_CKO_RNA1.count", 
+                                                 "PRC2_CKO_RNA2.count", "PRC2_CKO_RNA3.count")], 
+                                 CGroup = 3, TGroup = 3)
+)
+
+DESeq_rpkm <- merge(DESeq[, c("id", 
+                              "PRC2_CTR_RNA1.count", "PRC2_CTR_RNA2.count", "PRC2_CTR_RNA3.count",
+                              "PRC2_CKO_RNA1.count", "PRC2_CKO_RNA2.count", "PRC2_CKO_RNA3.count",
+                                    "log2FoldChange", "padj")],
+                       rpkm[, c("id", "name",
+                                "PRC2_CTR_RNA1.rpkm", "PRC2_CTR_RNA2.rpkm", "PRC2_CTR_RNA3.rpkm",
+                                "PRC2_CKO_RNA1.rpkm", "PRC2_CKO_RNA2.rpkm", "PRC2_CKO_RNA3.rpkm")],
+                       by = "id")
+
+DESeq_rpkm$padj[is.na(DESeq_rpkm$padj)] <- 1
+
+DESeq_rpkm.group <- classifyDEG(
+                            DESeq_rpkm,
+                            ctr.rpkm = c("PRC2_CTR_RNA1.rpkm", 
+                                         "PRC2_CTR_RNA2.rpkm", "PRC2_CTR_RNA3.rpkm"),
+                            trt.rpkm = c("PRC2_CKO_RNA1.rpkm", 
+                                         "PRC2_CKO_RNA2.rpkm", "PRC2_CKO_RNA3.rpkm"),
+                            FDR.col = "padj", log2FC.col = "log2FoldChange",
+                            RPKM = FPKMcutoff, log2FC = log2(foldchange), FDR = 0.05)
+
+DESeq_rpkm <- cbind(DESeq_rpkm, DESeq_rpkm.group)
+
+DESeq_rpkm.up <- DESeq_rpkm[DESeq_rpkm.group == "up-regulated",]
+DESeq_rpkm.down <- DESeq_rpkm[DESeq_rpkm.group == "down-regulated",]
+DESeq_rpkm.detectable <- DESeq_rpkm[DESeq_rpkm.group != "low_expression_level",]
+
+Fpkm = 0.5
+nrow(DESeq_rpkm.up) #414
+nrow(DESeq_rpkm.down) #67
+nrow(DESeq_rpkm.detectable) #14249
+
+DESeq_rpkm[DESeq_rpkm$name == "Eed",]
+
+
+write.table(DESeq_rpkm, "./R_output/250613_PRC2_gv_genes_DE_analyses.csv",
+            quote = F, sep = ",", row.names = F)
+
+DESeq_rpkm$log2CTR <- log2(
+  (DESeq_rpkm$PRC2_CTR_RNA1.count + DESeq_rpkm$PRC2_CTR_RNA2.count + DESeq_rpkm$PRC2_CTR_RNA3.count ) /3 + 1)
+
+DESeq_rpkm$log2CKO <- log2(
+  (DESeq_rpkm$PRC2_CKO_RNA1.count + DESeq_rpkm$PRC2_CKO_RNA2.count + DESeq_rpkm$PRC2_CKO_RNA3.count) / 3 + 1)
+
+#switch the label (CTR vs. CKO, up vs. down) here 
+DESeq_rpkm.up.label <- paste0("Up-regulated:\n", nrow(DESeq_rpkm.down),
+                                 " (", format(round(nrow(DESeq_rpkm.down)/nrow(DESeq_rpkm.detectable)*100, 2), nsmall = 2), "%)")
+DESeq_rpkm.down.label <- paste0("Down-regulated:\n", nrow(DESeq_rpkm.up),
+                                 " (", format(round(nrow(DESeq_rpkm.up)/nrow(DESeq_rpkm.detectable)*100, 2), nsmall = 2), "%)")
+
+pdf("./figures/250613_PRC2_gv_genes_DE_scatterplot.pdf", width = 6, height = 5)
+ggScatterplot(DESeq_rpkm, x = "log2CTR", y = "log2CKO",
+                       group = "DESeq_rpkm.group", gene = "name", xlab = "CTR",
+                       ylab = "PRC2 KO",
+                       title = "GV (genes)",
+                       label.up = DESeq_rpkm.up.label,
+                       label.down = DESeq_rpkm.down.label,
+                       genes4Label = c(),
+                       FC.line = foldchange,
+                       my.color=c("blue", "grey50", "grey50","red3"))
+dev.off()
+```
+
+
+### 6. PRC1/2 DEG vs BAP1
+
+```{r}
+BAP1_gv_RNA  <- read.csv("./R_output/250315_BAP1_gv_genes_DE_analyses.csv")
+nrow(BAP1_gv_RNA) #20540
+
+BAP1_up <- BAP1_gv_RNA[which(BAP1_gv_RNA$gv_DESeq_rpkm.group == "up-regulated"),]
+BAP1_down <- BAP1_gv_RNA[which(BAP1_gv_RNA$gv_DESeq_rpkm.group == "down-regulated"),]
+BAP1_up_pcg <- BAP1_up[which(BAP1_up$id %in% PcG_df$id),]
+
+nrow(BAP1_up) #101
+nrow(BAP1_down) #827
+nrow(BAP1_up_pcg) #12
+
+PRC1_gv_RNA <- read.csv("./R_output/250325_PRC1_gv_genes_DE_analyses.csv")
+nrow(PRC1_gv_RNA) #24992
+
+PRC1_up <- PRC1_gv_RNA[which(PRC1_gv_RNA$DESeq_rpkm.group == "down-regulated"),]
+PRC1_down <- PRC1_gv_RNA[which(PRC1_gv_RNA$DESeq_rpkm.group == "up-regulated"),]
+PRC1_up_pcg <- PRC1_up[which(PRC1_up$id %in% PcG_df$id),]
+
+nrow(PRC1_up) #2417
+nrow(PRC1_down) #700
+nrow(PRC1_up_pcg) #521
+
+PRC2_gv_RNA <- read.csv("./R_output/250613_PRC2_gv_genes_DE_analyses.csv")
+nrow(PRC2_gv_RNA) #26147
+
+PRC2_up <- PRC2_gv_RNA[which(PRC2_gv_RNA$DESeq_rpkm.group == "up-regulated"),]
+PRC2_down <- PRC2_gv_RNA[which(PRC2_gv_RNA$DESeq_rpkm.group == "down-regulated"),]
+PRC2_up_pcg <- PRC2_up[which(PRC2_up$id %in% PcG_df$id),]
+
+nrow(PRC2_up) #414
+nrow(PRC2_down) #67
+nrow(PRC2_up_pcg) #103
+
+suppressMessages(library(VennDiagram))
+suppressMessages(library(ggsci))
+suppressMessages(library(eulerr))
+
+#fig S4c in manuscript
+pdf("./figures/250613_BAP1_PRCs_RNA_overlap_venn.pdf", width = 5, height = 5)
+plot(
+  euler(
+    list(
+      "BAP1 (Down)" = unique(BAP1_down$id),
+      "PRC1 (Down)" = unique(PRC1_down$id),
+      "PRC2 (Down)" = unique(PRC2_down$id)
+    ), 
+    shape = "ellipse", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (Down)" = unique(BAP1_down$id),
+      "PRC1 (Down)" = unique(PRC1_down$id),
+      "PRC2 (Down)" = unique(PRC2_down$id)
+    )))
+
+plot(
+  euler(
+    list(
+      "BAP1 (up)" = unique(BAP1_up$id),
+      "PRC1 (up)" = unique(PRC1_up$id),
+      "PRC2 (up)" = unique(PRC2_up$id)
+    ), 
+    shape = "circle", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (up)" = unique(BAP1_up$id),
+      "PRC1 (up)" = unique(PRC1_up$id),
+      "PRC2 (up)" = unique(PRC2_up$id)
+    )))
+dev.off()
+
+#fig 3c in manuscript
+pdf("./figures/250616_BAP1_PRCs_PcGup_overlap_venn.pdf", width = 5, height = 5)
+plot(
+  euler(
+    list(
+      "BAP1 (PcG up)" = unique(BAP1_up_pcg$id),
+      "PRC1 (PcG up)" = unique(PRC1_up_pcg$id),
+      "PRC2 (PcG up)" = unique(PRC2_up_pcg$id)
+    ), 
+    shape = "circle", 
+    quantities = TRUE
+  )
+)
+plot(venn(list(
+      "BAP1 (PcG up)" = unique(BAP1_up_pcg$id),
+      "PRC1 (PcG up)" = unique(PRC1_up_pcg$id),
+      "PRC2 (PcG up)" = unique(PRC2_up_pcg$id)
+    )))
+dev.off()
+```
+
+### 7. PcG up heatmap
+```{r}
+#PcG genes up in PRC1, PRC2, or PR-DUB KO oocytes
+PcG_up <- unique(c(PRC1_up_pcg$id, 
+                   PRC2_up_pcg$id,
+                   BAP1_up_pcg$id))
+length(PcG_up) #539
+
+bap1_fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+prc1_fpkm <- read.csv("./R_output/250616_PRC1_GV_RNA_fpkm.csv")
+prc2_fpkm <- read.csv("./R_output/250616_PRC2_GV_RNA_fpkm.csv")
+#need to use the original FPKM (do a FPKM change)
+
+bap1_fpkm$bap1_ctr_mean <- (bap1_fpkm$ctr_gv_1.rpkm + bap1_fpkm$ctr_gv_2.rpkm) / 2
+bap1_fpkm$bap1_cko_mean <- (bap1_fpkm$cko_gv_1.rpkm + bap1_fpkm$cko_gv_2.rpkm + 
+                            bap1_fpkm$cko_gv_3.rpkm) / 3
+
+prc1_fpkm$prc1_ctr_mean <- (prc1_fpkm$CKO_RNA1.rpkm + prc1_fpkm$CKO_RNA2.rpkm +
+                            prc1_fpkm$CKO_RNA3.rpkm) / 3
+prc1_fpkm$prc1_cko_mean <- (prc1_fpkm$CTR_RNA1.rpkm + prc1_fpkm$CTR_RNA2.rpkm + 
+                            prc1_fpkm$CTR_RNA3.rpkm) / 3
+
+prc2_fpkm$prc2_ctr_mean <- (prc2_fpkm$PRC2_CTR_RNA1.rpkm + prc2_fpkm$PRC2_CTR_RNA2.rpkm + 
+                            prc2_fpkm$PRC2_CTR_RNA3.rpkm) / 3
+prc2_fpkm$prc2_cko_mean <- (prc2_fpkm$PRC2_CKO_RNA1.rpkm + prc2_fpkm$PRC2_CKO_RNA2.rpkm +
+                            prc2_fpkm$PRC2_CKO_RNA3.rpkm) / 3
+
+df4htp1 <- bap1_fpkm[which(bap1_fpkm$id %in% PcG_up),
+                    c("id", "name", "bap1_ctr_mean", "bap1_cko_mean")]
+df4htp1$bap1_fc <- log2(df4htp1$bap1_cko_mean + 0.01) - 
+                   log2(df4htp1$bap1_ctr_mean + 0.01)
+
+nrow(df4htp1) #539
+Heatmap(as.matrix(log2(df4htp1[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp1[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+df4htp2 <- prc1_fpkm[which(prc1_fpkm$id %in% PcG_up),
+                     c("id", "name", "prc1_ctr_mean", "prc1_cko_mean")]
+df4htp2$prc1_fc <- log2(df4htp2$prc1_cko_mean + 0.01) -
+                   log2(df4htp2$prc1_ctr_mean + 0.01)
+nrow(df4htp2) #539
+
+Heatmap(as.matrix(log2(df4htp2[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp2[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+df4htp3 <- prc2_fpkm[which(prc2_fpkm$id %in% PcG_up),
+                     c("id", "name", "prc2_ctr_mean", "prc2_cko_mean")]
+df4htp3$prc2_fc <- log2(df4htp3$prc2_cko_mean + 0.01) -
+                   log2(df4htp3$prc2_ctr_mean + 0.01)
+nrow(df4htp3) #539
+
+Heatmap(as.matrix(log2(df4htp3[, c(3:4)]+0.01)), 
+        cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(log2(df4htp3[, c(3:4)]+0.01)), c(0, 0.5, 0.99)), 
+        c("#507BA9", "white", "#C74236")))
+
+
+df4htp <- cbind(df4htp1,
+                df4htp2[, c(3:5)],
+                df4htp3[, c(3:5)])
+head(df4htp)
+
+# Heatmap(as.matrix(df4htp[, c(2:4)]), 
+#         cluster_rows=T, cluster_columns=F, show_row_names=F, column_names_side="top",
+#         cluster_row_slices=F, border='black', column_names_rot = 45,
+#         row_names_gp = gpar(fontface = "italic"),
+#         row_title_rot=0, 
+#         row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+#         heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+#         #col=colorRamp2(quantile(as.matrix(df4htp[, c(2:4)]), c(0, 0.5, 0.99)), 
+#         col=colorRamp2(c(-5, 0, 5),
+#         c("#507BA9", "white", "#C74236")))
+
+df4htp_bap1only <- df4htp[which(df4htp$name %in% BAP1_up_pcg$name),]
+row.names(df4htp_bap1only) <- df4htp_bap1only$name
+mat <- as.matrix(df4htp_bap1only[, c("bap1_fc", "prc1_fc", "prc2_fc")])
+mat2 <- as.matrix(df4htp_bap1only[, c("bap1_ctr_mean", "bap1_cko_mean",
+                                      "prc1_ctr_mean", "prc1_cko_mean",
+                                      "prc2_ctr_mean", "prc2_cko_mean")])
+pdf("./figures/250616_PcG_PRC_BAP1_htp.pdf", width = 6, height = 4)
+Heatmap(mat, 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2FC"),
+        #col=colorRamp2(quantile(as.matrix(df4htp[, c(2:4)]), c(0, 0.5, 0.99)), 
+        col=colorRamp2(c(-4, 0, 4),
+        c("#507BA9", "white", "#C74236")))
+
+#Fig 3d in manuscript
+Heatmap(log2(mat2+0.01), 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2FPKM"),
+        col=colorRamp2(quantile(log2(mat2+0.01), c(0, 0.5, 0.99)), 
+        #col=colorRamp2(c(-4, 0, 4),
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
+

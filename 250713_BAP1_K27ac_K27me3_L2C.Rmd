@@ -1,0 +1,699 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+### 1. QC
+
+Fig. 6a-d
+Fig. S8a-d, S8f-g.
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+source("./utils.R")
+
+#blacklist
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+bw1 <- list(
+  CTR_K27me3_L2C_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250309_BAP1_L2C_K27me3_H2Aub_K27ac_rep1/bigwigs/BAP1_L2C_CTR_K27me3_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CTR_K27me3_L2C_2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250604_BAP1_L2C_K27me3_K27ac_rep2/bigwigs/BAP1_L2C_CTR_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_K27me3_L2C_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250309_BAP1_L2C_K27me3_H2Aub_K27ac_rep1/bigwigs/BAP1_L2C_CKO_K27me3_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_K27me3_L2C_2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250604_BAP1_L2C_K27me3_K27ac_rep2/bigwigs/BAP1_L2C_CKO_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw",
+  CTR_K27ac_L2C_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250309_BAP1_L2C_K27me3_H2Aub_K27ac_rep1/bigwigs/BAP1_L2C_CTR_K27ac_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CTR_K27ac_L2C_2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250604_BAP1_L2C_K27me3_K27ac_rep2/bigwigs/BAP1_L2C_CTR_K27ac_rep2_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_K27ac_L2C_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250309_BAP1_L2C_K27me3_H2Aub_K27ac_rep1/bigwigs/BAP1_L2C_CKO_K27ac_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_K27ac_L2C_2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250604_BAP1_L2C_K27me3_K27ac_rep2/bigwigs/BAP1_L2C_CKO_K27ac_rep2_mm10.sorted.multi.Q30.dedup.bw"
+)
+
+path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs"
+bw2 <- list(
+  CTR_K27me3_L2C = paste0(path, "/CTR_L2C_K27me3.sorted_merged.bw"),
+  CKO_K27me3_L2C = paste0(path, "/CKO_L2C_K27me3.sorted_merged.bw"),
+  CTR_K27ac_L2C = paste0(path, "/CTR_L2C_K27ac.sorted_merged.bw"),
+  CKO_K27ac_L2C = paste0(path, "/CKO_L2C_K27ac.sorted_merged.bw")
+) 
+```
+#### 1.1 Generate 5kb bins
+```{r}
+#generate 5kb window
+GW_5kb_windows <- GRangesList()
+seqlevels(GW_5kb_windows) = paste0("chr",c(1:19,"X"))
+seqlengths(GW_5kb_windows) = seqlengths(BSgenome.Mmusculus.UCSC.mm10)[seqlevels(GW_5kb_windows)]
+
+for(chrom in paste0("chr",c(1:19,"X","Y"))){
+  region <- GRanges(chrom, IRanges(1, seqlengths(BSgenome.Mmusculus.UCSC.mm10)[chrom]))
+  gr = slidingWindows(region,width = 5e3,step = 5e3)[[1]] 
+  #width: width of each tile, 
+  #step: distance between the start positions of the sliding windows.
+  GW_5kb_windows[[chrom]] = gr
+}
+
+GW_5kb_windows = GW_5kb_windows %>% unlist()
+
+length(GW_5kb_windows) #545114
+
+#remove windows overlappign blacklist
+GW_5kb_windows <- GW_5kb_windows[ !GW_5kb_windows %over% mm10_blacklist]
+length(GW_5kb_windows) #493982
+```
+
+#### 1.2 Count 5kb bin signals
+```{r}
+#count signals
+histone_5kb <-  matrix(0, ncol= length(bw1), nrow=length(GW_5kb_windows))
+colnames(histone_5kb) = names(bw1)
+
+for(sample in names(bw1)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw1[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  histone_5kb[,sample] = calcPeaksSignal(GW_5kb_windows, bw_file)$meanScore
+}
+
+head(histone_5kb)
+histone_5kb <- as.data.frame(histone_5kb)
+histone_5kb$chr <- as.character(seqnames(GW_5kb_windows))
+histone_5kb$start <- start(GW_5kb_windows)
+histone_5kb$end <- end(GW_5kb_windows)
+saveRDS(histone_5kb, "./R_output/250609_L2C_K27me3_K27ac_5kb_bin_signals.rds")
+histone_5kb <- readRDS("./R_output/250609_L2C_K27me3_K27ac_5kb_bin_signals.rds")
+```
+
+#### 1.3 Scatter plot
+
+```{r}
+log_histone_5kb <- log2(histone_5kb[, c(1:8)]+0.01)
+
+#Fig. S8a in manuscript
+pdf("./figures/250609_L2C_K27me3_K27ac_5kb_bin_smoothScatter.pdf", width = 5, height = 5)
+smoothScatter(log_histone_5kb[,1], 
+              log_histone_5kb[,2], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR", 
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(log_histone_5kb[,3], 
+              log_histone_5kb[,4], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO",
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(log_histone_5kb[,5], 
+              log_histone_5kb[,6], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27ac CTR",
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+smoothScatter(log_histone_5kb[,7], 
+              log_histone_5kb[,8], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27ac CKO",
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+dev.off()
+
+cor(log_histone_5kb[,1], log_histone_5kb[,2])
+#0.86
+cor(log_histone_5kb[,3], log_histone_5kb[,4])
+#0.85
+cor(log_histone_5kb[,5], log_histone_5kb[,6])
+#0.67
+cor(log_histone_5kb[,7], log_histone_5kb[,8])
+#0.62
+```
+
+### 2. Metaplot 
+
+For input, refers to 
+"/users/chend4/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250609_K27ac_loss_in_GV_L2C" & 
+"/users/chend4/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250609_K27me3_gain_in_GV_L2C"
+```{bash}
+CTR_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27me3_merged.bw"
+CKO_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27me3_merged.bw"
+
+CTR_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_mat.sorted_merged.bw"
+CTR_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_pat.sorted_merged.bw"
+CKO_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_mat.sorted_merged.bw"
+CKO_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_pat.sorted_merged.bw"
+
+computeMatrix scale-regions \
+	-S $CTR_K27me3 $CKO_K27me3 $CTR_L2C_K27me3_mat $CTR_L2C_K27me3_pat $CKO_L2C_K27me3_mat $CKO_L2C_K27me3_pat \
+	-R /data/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250320_K27ac_lost_filter_5kb.bed \
+	-a 2000 -b 2000 \
+	-m 6000 \
+	--outFileName 250609.K27me3.GV.L2C.mat.gz \
+	--sortRegions 'descend' \
+	--samplesLabel 'C_K27me3' 'K_K27me3' 'C_K27me3_mat' 'C_K27me3_pat' 'K_K27me3_mat' 'K_K27me3_pat'  \
+	--outFileNameMatrix  250609.K27me3.GV.L2C.matrix \
+	--missingDataAsZero \
+	--sortUsingSamples 1
+	
+plotHeatmap --matrixFile 250609.K27me3.GV.L2C.mat.gz \
+	--outFileName 250609.K27me3.GV.L2C.mat2.pdf \
+	--outFileSortedRegions 250609.K27me3.GV.L2C.mat.bed \
+	--dpi 300 \
+	--sortRegions "descend" \
+	--colorMap 'RdYlBu_r' \
+	--boxAroundHeatmaps no \
+	--legendLocation "lower-center" \
+	--sortUsingSamples 1 \
+	--zMax 12 12 12 12 12 12 
+	
+CTR_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27ac_merged.bw"
+CKO_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27ac_merged.bw"
+
+CTR_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_mat.sorted_merged.bw"
+CTR_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_pat.sorted_merged.bw"
+CKO_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_mat.sorted_merged.bw"
+CKO_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_pat.sorted_merged.bw"
+
+computeMatrix scale-regions \
+	-S $CTR_K27ac $CKO_K27ac $CTR_L2C_K27ac_mat $CTR_L2C_K27ac_pat $CKO_L2C_K27ac_mat $CKO_L2C_K27ac_pat  \
+	-R /data/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250320_K27ac_lost_filter_5kb.bed \
+	-a 2000 -b 2000 \
+	-m 6000 \
+	--outFileName 250609.K27ac.GV.L2C.mat.gz \
+	--sortRegions 'descend' \
+	--samplesLabel 'C_K27ac' 'K_K27ac' 'C_K27ac_mat' 'C_K27ac_pat' 'K_K27ac_mat' 'K_K27ac_pat'  \
+	--outFileNameMatrix  250609.K27ac.GV.L2C.matrix \
+	--missingDataAsZero \
+	--sortUsingSamples 1
+
+plotHeatmap --matrixFile 250609.K27ac.GV.L2C.mat.gz \
+	--outFileName 250609.K27ac.GV.L2C.mat22.pdf \
+	--outFileSortedRegions 250609.K27ac.GV.L2C.mat.bed \
+	--dpi 300 \
+	--sortRegions "descend" \
+	--colorMap 'RdYlBu_r' \
+	--boxAroundHeatmaps no \
+	--legendLocation "lower-center" \
+	--sortUsingSamples 1 \
+	--zMax 12 12 12 12 12 12 
+```
+
+```{r}
+K27me3_meta <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250609_K27me3_gain_in_GV_L2C/250609.K27me3.GV.L2C.mean.matrix", header = T)
+
+dim(K27me3_meta)
+colnames(K27me3_meta) <- "mean"
+
+K27me3_meta$group <- c(rep("GV_CTR", 1000), rep("GV_CKO", 1000),
+                       rep("L2C_CTR_mat", 1000), rep("L2C_CTR_pat", 1000),
+                       rep("L2C_CKO_mat", 1000), rep("L2C_CKO_pat", 1000))
+
+K27me3_meta$bp <- rep(seq(1:1000), 6)
+
+GV_df <- K27me3_meta[c(1:2000),]
+L2C_mat_df <- K27me3_meta[c(2001:3000, 4001:5000),]
+L2C_pat_df <- K27me3_meta[c(3001:4000, 5001:6000),]
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+pdf("./figures/250610_K27me3_GV_L2C_over_K27aclost_domain_metaplot.pdf", width = 6, height = 4)
+ggplot(GV_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV K27me3")
+ggplot(L2C_mat_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("L2C mat")
+ggplot(L2C_pat_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("L2C pat")
+dev.off()
+```
+
+```{r}
+K27ac_meta <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250609_K27ac_loss_in_GV_L2C/250609.K27ac.GV.L2C.mean.matrix", header = T)
+
+dim(K27ac_meta)
+colnames(K27ac_meta) <- "mean"
+
+K27ac_meta$group <- c(rep("GV_CTR", 1000), rep("GV_CKO", 1000),
+                       rep("L2C_CTR_mat", 1000), rep("L2C_CTR_pat", 1000),
+                       rep("L2C_CKO_mat", 1000), rep("L2C_CKO_pat", 1000))
+
+K27ac_meta$bp <- rep(seq(1:1000), 6)
+
+GV_df <- K27ac_meta[c(1:2000),]
+L2C_mat_df <- K27ac_meta[c(2001:3000, 4001:5000),]
+L2C_pat_df <- K27ac_meta[c(3001:4000, 5001:6000),]
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+pdf("./figures/250610_K27ac_GV_L2C_over_K27aclost_domain_metaplot.pdf", width = 6, height = 4)
+ggplot(GV_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,5)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("GV K27ac")
+ggplot(L2C_mat_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,5)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("L2C mat")
+ggplot(L2C_pat_df, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,5)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("L2C pat")
+dev.off()
+```
+
+### 3. L2C DEGs and K27ac-lost domains
+
+```{r}
+load("./R_output/250625_K27ac_lost_annotation.RDS")
+table(lost_annotation$simpleAnnotation)
+
+L2C_DESeq_rpkm <- read.csv("./R_output/250315_BAP1_l2c_genes_DE_analyses.csv")
+nrow(L2C_DESeq_rpkm) #22134
+
+l2c_down <- L2C_DESeq_rpkm[L2C_DESeq_rpkm$l2c_DESeq_rpkm.group == "down-regulated", ]
+nrow(l2c_down)
+
+#start from here 062525
+RNA_lost <- L2C_DESeq_rpkm[which(
+  L2C_DESeq_rpkm$id %in% lost_annotation[which(
+    lost_annotation$simpleAnnotation == "Promoter" |
+    lost_annotation$simpleAnnotation == "Intragenic"
+  ), ]$geneId
+),]
+nrow(RNA_lost) #1015
+
+table(RNA_lost$l2c_DESeq_rpkm.group)
+#down-regulated low_expression_level        similar_level         up-regulated 
+#@                110                  419                  432                   54 
+RNA_lost <- RNA_lost[which(RNA_lost$l2c_DESeq_rpkm.group != "low_expression_level"),]
+
+nrow(RNA_lost) #596
+table(RNA_lost$l2c_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#           110            432             54 
+
+
+#boxplot(RNA_lost$log2FoldChange)
+pie(c(110, 1647-110))
+
+fpkm <- read.csv("./R_output/250315_BAP1_GV_to_L2C_fpkm.csv")
+head(fpkm)
+
+fpkm$ctr_gv <- (fpkm$ctr_gv_1.rpkm + fpkm$ctr_gv_2.rpkm) / 2
+fpkm$cko_gv <- (fpkm$cko_gv_1.rpkm + fpkm$cko_gv_2.rpkm + fpkm$cko_gv_3.rpkm) / 3
+fpkm$ctr_mii <- (fpkm$ctr_mii_1.rpkm + fpkm$ctr_mii_2.rpkm) / 2
+fpkm$cko_mii <- (fpkm$cko_mii_1.rpkm + fpkm$cko_mii_2.rpkm + fpkm$cko_mii_3.rpkm) / 3
+fpkm$ctr_l1c <- (fpkm$ctr_l1c_1.rpkm + fpkm$ctr_l1c_2.rpkm) / 2
+fpkm$mko_l1c <- (fpkm$mKO_l1c_1.rpkm + fpkm$mKO_l1c_2.rpkm + fpkm$mKO_l1c_3.rpkm) / 3
+fpkm$ctr_e2c <- (fpkm$ctr_e2c_1.rpkm + fpkm$ctr_e2c_2.rpkm + fpkm$ctr_e2c_3.rpkm) / 3
+fpkm$mko_e2c <- (fpkm$mKO_e2c_1.rpkm + fpkm$mKO_e2c_2.rpkm + fpkm$mKO_e2c_3.rpkm) / 3
+fpkm$ctr_l2c <- (fpkm$ctr_l2c_1.rpkm + fpkm$ctr_l2c_2.rpkm) / 2
+fpkm$mko_l2c <- (fpkm$mKO_l2c_1.rpkm + fpkm$mKO_l2c_2.rpkm + fpkm$mKO_l2c_3.rpkm) / 3
+
+
+fpkm_lost <- fpkm[which(fpkm$id %in% 
+                          RNA_lost[which(RNA_lost$l2c_DESeq_rpkm.group == "down-regulated"), c("id")]), ]
+nrow(fpkm_lost) #110
+row.names(fpkm_lost) <- fpkm_lost$name
+
+fpkm_lost4boxplot <- gather(fpkm_lost[, c(29:38)])
+
+fpkm_lost4boxplot$key <- factor(fpkm_lost4boxplot$key, 
+                                levels = c("ctr_gv", "cko_gv", 
+                                           "ctr_mii", "cko_mii",
+                                           "ctr_l1c", "mko_l1c",
+                                           "ctr_e2c", "mko_e2c",
+                                           "ctr_l2c", "mko_l2c"))
+fpkm_lost4boxplot$value2 <- log2(fpkm_lost4boxplot$value + 0.1)
+
+#Fig. S8f, S8g
+pdf("./figures/250625_K27ac_lost_domains_L2C_downGenes_boxplot.pdf", height = 4, width = 6)
+ggplot(fpkm_lost4boxplot, aes(x = key, y = value2)) + 
+  geom_boxplot(outlier.color = NA) + 
+  ylab("RNA (log2FPKM") + ylim(-6, 10) +
+  #geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  # scale_x_discrete(
+  #     labels= c("Putative enhancer", "Promoter", "Gene body", "Intergenic")) +
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "none")# +
+  #scale_color_aaas() +
+  #scale_fill_aaas() 
+dev.off()
+
+# library(pheatmap)
+# mat <- log2(as.matrix(fpkm_lost[, c(29:38)])+0.1)
+# pdf("./figures/250625_K27ac_lost_domains_L2C_downGenes.pdf", height = 10, width = 6)
+# pheatmap(mat, cluster_rows = T, cluster_cols = F)
+# pie(c(110, 1647-110))
+# boxplot(mat)
+# dev.off()
+
+#dev.off()
+#boxplot(mat)
+```
+
+### 4. maternal/ZGA and K27 anayses
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+source("./utils.R")
+
+#blacklist
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf", )
+
+mm10_promoters <- promoters(genes(mm10_gene_annotation), 
+                            upstream = 2500, downstream = 2500)
+mm10_promoters <- keepSeqlevels(mm10_promoters, paste0("chr", c(1:19, "X")),
+                            pruning.mode = "coarse")
+head(mm10_promoters)
+length(mm10_promoters) #53795
+
+mm10_promoters$gene_id_clean <- sub("\\.\\d+$", "", mm10_promoters$gene_id)
+```
+
+Major ZGA and maternal RNA coordinates
+```{r}
+suppressMessages(library(readxl))
+
+Meng_l2c_majorZGA <- read_xlsx("./R_input/CBPp300_paper/embj2022112012-sup-0003-datasetev1.xlsx", 
+                               sheet = 3, skip = 2, 
+                               col_names = c("id", "type", "name"))
+Meng_maternalRNA <- read_xlsx("./R_input/CBPp300_paper/embj2022112012-sup-0003-datasetev1.xlsx", 
+                               sheet = 4, skip = 2, 
+                               col_names = c("id", "type", "name"))
+
+Meng_l2c_majorZGA$id_clean <-  sub("\\.\\d+$", "", Meng_l2c_majorZGA$id)
+Meng_maternalRNA$id_clean <- sub("\\.\\d+$", "", Meng_maternalRNA$id)
+
+nrow(Meng_l2c_majorZGA) #2772
+nrow(Meng_maternalRNA) #3700
+
+majorZGA <- subset(mm10_promoters, gene_id_clean %in% Meng_l2c_majorZGA$id_clean)
+length(majorZGA) #2768
+seqlevels(majorZGA)
+maternal_gene <- subset(mm10_promoters, gene_id_clean %in% Meng_maternalRNA$id_clean)
+length(maternal_gene) #3678
+seqlevels(maternal_gene)
+
+write.table(
+ data.frame(
+    chr = seqnames(majorZGA),
+    start = start(majorZGA), 
+    end = end(majorZGA),
+    name = majorZGA$gene_id,
+    strand = strand(majorZGA)),
+ file = "./R_output/250625_majorZGA.bed",
+ quote = F, row.names = F, col.names = F, sep = "\t"
+)
+
+write.table(
+ data.frame(
+    chr = seqnames(maternal_gene),
+    start = start(maternal_gene), 
+    end = end(maternal_gene),
+    name = maternal_gene$gene_id,
+    strand = strand(maternal_gene)),
+ file = "./R_output/250625_maternal_RNA.bed",
+ quote = F, row.names = F, col.names = F, sep = "\t"
+)
+```
+
+L2C putative enhancer cooridnates
+```{r}
+#mm9 based 
+distal_K27ac_Xie <- read_xlsx("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/HomerMotif/250312_reproduce_WeiXie_Tcf3_Tcf12/41556_2024_1422_MOESM3_ESM.xlsx", sheet = 6, skip = 2)
+
+#convert to mm10
+suppressMessages(library("liftOver"))
+
+distal_K27ac_Xie <- makeGRangesFromDataFrame(distal_K27ac_Xie,
+                                             keep.extra.columns=FALSE,
+                                             ignore.strand=T,
+                                             seqinfo=NULL,
+                                             seqnames.field=c("seqnames", "seqname",
+                                                              "chromosome", "chrom",
+                                                              "chr", "chromosome_name",
+                                                              "seqid"),
+                                             start.field="start",
+                                             end.field=c("end", "stop"),
+                                             starts.in.df.are.0based=FALSE)
+head(distal_K27ac_Xie)
+
+path = system.file(package="liftOver", "extdata", "mm9ToMm10.over.chain")
+ch = import.chain(path)
+seqlevelsStyle(distal_K27ac_Xie) <- "UCSC"
+distal_K27ac_Xie_mm10 <- liftOver(distal_K27ac_Xie, ch)
+distal_K27ac_Xie_mm10 <- unlist(distal_K27ac_Xie_mm10)
+genome(distal_K27ac_Xie_mm10) <- "mm10"
+length(distal_K27ac_Xie_mm10)-length(distal_K27ac_Xie)
+#lost about 95 regions
+write.table(
+  data.frame(chr = seqnames(distal_K27ac_Xie_mm10),
+             start = start(distal_K27ac_Xie_mm10),
+             end = end(distal_K27ac_Xie_mm10),
+             id = seq(1, length(distal_K27ac_Xie_mm10)),
+             empty = seq(1, length(distal_K27ac_Xie_mm10)),
+             strand = rep("+", length(distal_K27ac_Xie_mm10))
+           ),
+  file = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250625_L2C_enhancer_mm10.bed",
+  quote = F, col.names = F, row.names = F, sep = "\t"
+)
+
+```
+
+##### 4.1 metaplot analyses
+```{bash}
+CTR_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27me3_merged.bw"
+CKO_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27me3_merged.bw"
+CTR_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_K27ac_merged.bw"
+CKO_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_K27ac_merged.bw"
+
+CTR_L2C_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3.sorted_merged.bw"
+CKO_L2C_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3.sorted_merged.bw"
+CTR_L2C_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac.sorted_merged.bw"
+CKO_L2C_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac.sorted_merged.bw"
+CTR_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_mat.sorted_merged.bw"
+CTR_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27me3_pat.sorted_merged.bw"
+CKO_L2C_K27me3_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_mat.sorted_merged.bw"
+CKO_L2C_K27me3_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27me3_pat.sorted_merged.bw"
+CTR_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_mat.sorted_merged.bw"
+CTR_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CTR_L2C_K27ac_pat.sorted_merged.bw"
+CKO_L2C_K27ac_mat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_mat.sorted_merged.bw"
+CKO_L2C_K27ac_pat="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250605_BAP1_L2C_CR_reps_merged/bigwigs/CKO_L2C_K27ac_pat.sorted_merged.bw"
+
+computeMatrix reference-point \
+	-S $CTR_L2C_K27me3 $CKO_L2C_K27me3 \
+	   $CTR_L2C_K27ac  $CKO_L2C_K27ac \
+        -R 250625_majorZGA.bed \
+        --referencePoint center \
+        -a 10000 -b 10000 \
+        --outFileName 250625.K27me3.K27ac.GV.L2C.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel 'CTR2C_K27me3' 'CKO2C_K27me3' 'CTR2C_K27ac' 'CKO2C_K27ac' \
+        --outFileNameMatrix 250625.K27me3.K27ac.GV.L2C.mat.matrix \
+        --missingDataAsZero  \
+        --sortUsingSamples 3
+
+plotHeatmap --matrixFile  250625.K27me3.K27ac.GV.L2C.mat.gz \
+            --outFileName  250625.K27me3.K27ac.GV.L2C.mat.pdf \
+            --outFileSortedRegions 250625.K27me3.K27ac.GV.L2C.mat.matrix.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 3 \
+            --zMax 30 30  20 20  
+            
+computeMatrix reference-point \
+	-S $CTR_K27me3 $CKO_K27me3 $CTR_L2C_K27me3 $CKO_L2C_K27me3 \
+	   $CTR_K27ac  $CKO_K27ac  $CTR_L2C_K27ac  $CKO_L2C_K27ac \
+        -R 250625_maternal_RNA.bed \
+        --referencePoint center \
+        -a 10000 -b 10000 \
+        --outFileName 250625.K27me3.K27ac.GV.L2C.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel 'C_K27me3' 'K_K27me3' 'CTR2C_K27me3' 'CKO2C_K27me3' 'C_K27ac' 'K_K27ac' 'CTR2C_K27ac' 'CKO2C_K27ac' \
+        --outFileNameMatrix 250625.K27me3.K27ac.GV.L2C.mat.matrix \
+        --missingDataAsZero  \
+        --sortUsingSamples 7
+
+plotHeatmap --matrixFile  250625.K27me3.K27ac.GV.L2C.mat.gz \
+            --outFileName  250625.K27me3.K27ac.GV.L2C.mat.pdf \
+            --outFileSortedRegions 250625.K27me3.K27ac.GV.L2C.mat.matrix.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 7 \
+            --zMax 30 30 30 30  20 20 20 20 
+            
+computeMatrix reference-point \
+        -S $CTR_K27ac $CKO_K27ac $CTR_L2C_K27ac  $CKO_L2C_K27ac $CTR_K27me3 $CKO_K27me3 $CTR_L2C_K27me3 $CKO_L2C_K27me3 \
+        -R 250625_L2C_enhancer_mm10.bed \
+        --referencePoint center \
+        -a 10000 -b 10000 \
+        --outFileName 250626.K27me3.K27ac.GV.L2C.mat.gz \
+        --sortRegions 'descend' \
+        --outFileNameMatrix 250626.K27me3.K27ac.GV.L2C.mat.matrix \
+        --missingDataAsZero  \
+        --sortUsingSamples 1
+        
+plotHeatmap --matrixFile  250626.K27me3.K27ac.GV.L2C.mat.gz \
+            --outFileName  250626.K27me3.K27ac.GV.L2C.mat.kmeans${kmeans}.pdf \
+            --outFileSortedRegions 250626.K27me3.K27ac.GV.L2C.mat.matrix.kmeans${kmeans}.bed \
+            --kmeans $kmeans \
+	          --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 3 \
+            --zMax 15 15 15 15 20 20 20 20 
+```
+
+###### 4.1.1 Major ZGA genes
+```{r}
+zga <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250625_majorZGA_GV_L2C/250625.K27me3.K27ac.GV.L2C.mat.mean.matrix", header = T)
+
+dim(zga)
+colnames(zga) <- "mean"
+
+zga$group <- c(rep("CTR_K27me3", 2000), rep("CKO_K27me3", 2000),
+                       rep("CTR_K27ac", 2000), rep("CKO_K27ac", 2000))
+
+zga$bp <- rep(seq(1:2000), 4)
+
+zga_K27me3 <- zga[c(1:4000),]
+zga_K27ac <- zga[c(4001:8000),]
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+#Fig. 6b-c 
+pdf("./figures/2250626_ZGA_K27me3_K27ac_L2C_metaplot.pdf", width = 6, height = 4)
+ggplot(zga_K27me3, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("ZGA_K27me3")
+ggplot(zga_K27ac, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,18)) + 
+  scale_color_manual(values = c("grey", "black")) +
+  theme_cowplot(16) + ggtitle("ZGA_K27ac")
+dev.off()
+```
+###### 4.1.2 maternal genes
+```{r}
+maternal <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250625_maternalRNA_GV_L2C/250625.K27me3.K27ac.GV.L2C.mat.mean.matrix", header = T)
+
+dim(maternal)
+colnames(maternal) <- "mean"
+
+maternal$group <- c(rep("CTR_gv_K27me3", 2000), rep("CKO_gv_K27me3", 2000),
+                    rep("CTR_2c_K27me3", 2000), rep("CKO_2c_K27me3", 2000),
+                    rep("CTR_gv_K27ac", 2000), rep("CKO_gv_K27ac", 2000),
+                    rep("CTR_2c_K27ac", 2000), rep("CKO_2c_K27ac", 2000))
+
+maternal$bp <- rep(seq(1:2000), 8)
+
+maternal_2c_K27me3 <- maternal[c(4001:8000),]
+maternal_2c_K27ac <- maternal[c(12001:16000),]
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+pdf("./figures/2250626_maternalRNA_K27me3_K27ac_L2C_metaplot.pdf", width = 6, height = 4)
+ggplot(maternal_2c_K27me3, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("black", "grey"), 
+                     labels = c("CTR_K27me3", "CKO_K27me3")) +
+  theme_cowplot(16) + ggtitle("maternal_K27me3")
+ggplot(maternal_2c_K27ac, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,18)) + 
+  scale_color_manual(values = c("black", "grey"),
+                     labels = c("CTR_K27ac", "CKO_K27ac")) +
+  theme_cowplot(16) + ggtitle("maternal_K27ac")
+dev.off()
+```
+
+###### 4.1.3 enhancers
+```{r}
+enhancer <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250626_enhancer_L2C/250626.K27me3.K27ac.GV.L2C.mat.mean.matrix", header = T)
+
+dim(enhancer)
+colnames(enhancer) <- "mean"
+
+enhancer$group <- c(rep("CTR_gv_K27ac", 2000), rep("CKO_gv_K27ac", 2000),
+                    rep("CTR_2c_K27ac", 2000), rep("CKO_2c_K27ac", 2000),
+                    rep("CTR_gv_K27me3", 2000), rep("CKO_gv_K27me3", 2000),
+                    rep("CTR_2c_K27me3", 2000), rep("CKO_2c_K27me3", 2000))
+
+enhancer$bp <- rep(seq(1:2000), 8)
+
+enhancer_gv_K27ac <- enhancer[c(1:4000),]
+enhancer_2c_K27ac <- enhancer[c(4001:8000),]
+enhancer_gv_K27me3 <- enhancer[c(8001:12000),]
+enhancer_2c_K27me3 <- enhancer[c(12001:16000),]
+
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+pdf("./figures/2250626_enhancer_K27me3_K27ac_L2C_metaplot.pdf", width = 6, height = 4)
+ggplot(enhancer_gv_K27ac, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,18)) + 
+  scale_color_manual(values = c("grey", "black"), 
+                     labels = c("CTR_K27ac", "CKO_K27ac")) +
+  theme_cowplot(16) + ggtitle("gv_enhancer_K27ac")
+ggplot(enhancer_2c_K27ac, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,18)) + 
+  scale_color_manual(values = c("grey", "black"), 
+                     labels = c("CTR_K27ac", "CKO_K27ac")) +
+  theme_cowplot(16) + ggtitle("2c_enhancer_K27ac")
+ggplot(enhancer_2c_K27me3, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("grey", "black"),
+                     labels = c("CTR_K27me3", "CKO_K27me3")) +
+  theme_cowplot(16) + ggtitle("2c_enhancer_K27me3")
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+

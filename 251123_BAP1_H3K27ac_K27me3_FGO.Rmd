@@ -1,0 +1,1383 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+### 1. QC
+
+Fig. 2c, 2e-h, 2j
+Fig. S3a, S3c, S3e, S3f.
+
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+source("./utils.R")
+
+#blacklist
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs"
+bw <- list(
+  CTR_H2Aub = paste0(path, "/GV_CTR_H2Aub_merged.bw"),
+  CKO_H2Aub = paste0(path, "/GV_CKO_H2Aub.dedup.scaled.bw"),
+  CTR_K27me3 = paste0(path, "/BAP1_GV_CTR_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27me3 = paste0(path, "/BAP1_GV_CKO_K27me3_rep2_scaled.bw"),
+  CTR_K27ac  = paste0(path, "/CTR_K27ac_rep3_4_merged.bw"),
+  CKO_K27ac  = paste0(path, "/CKO_K27ac_rep3_4_scaled.bw")
+) 
+
+path2 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250307_BAP1_GV_K27me3_H2Aub_rep2_K27ac_rep1_2/bigwigs/"
+path3 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/251105_BAP1_GV_K27ac_rep3_4/bigwigs/"
+
+bw2 <- list(
+  CTR_K27me3_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241230_BAP1_GV_K27me3_H2Aub_K4me3_rep1/bigwigs/CTR_K27me3_rep1.dedup_merged.bw",
+  CKO_K27me3_1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241230_BAP1_GV_K27me3_H2Aub_K4me3_rep1/bigwigs/CKO_K27me3_rep1.dedup_merged.bw",
+  CTR_K27me3_2 = paste0(path2, 
+                        "BAP1_GV_CTR_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27me3_2 = paste0(path2, 
+                        "BAP1_GV_CKO_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_K27ac_1 = paste0(path2, 
+                       "BAP1_GV_CTR_K27ac_rep1_mm10.sorted.multi.Q30.dedup.bw"), 
+  CTR_K27ac_2 = paste0(path2, 
+                       "BAP1_GV_CTR_K27ac_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27ac_1 = paste0(path2, 
+                       "BAP1_GV_CKO_K27ac_rep1_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27ac_2 = paste0(path2,
+                       "BAP1_GV_CKO_K27ac_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_K27ac_3 = paste0(path3,
+                       "BAP1_GV_CTR_K27ac_rep3_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_K27ac_4 = paste0(path3,
+                       "BAP1_GV_CTR_K27ac_rep4_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27ac_3 = paste0(path3, 
+                       "BAP1_GV_CKO_K27ac_rep3_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_K27ac_4 = paste0(path3,
+                       "BAP1_GV_CKO_K27ac_rep4_mm10.sorted.multi.Q30.dedup.bw")
+)
+```
+
+#### 1.1 Generate 5kb bins
+```{r}
+#generate 5kb window
+GW_5kb_windows <- GRangesList()
+seqlevels(GW_5kb_windows) = paste0("chr",c(1:19,"X"))
+seqlengths(GW_5kb_windows) = seqlengths(BSgenome.Mmusculus.UCSC.mm10)[seqlevels(GW_5kb_windows)]
+
+for(chrom in paste0("chr",c(1:19,"X","Y"))){
+  region <- GRanges(chrom, IRanges(1, seqlengths(BSgenome.Mmusculus.UCSC.mm10)[chrom]))
+  gr = slidingWindows(region,width = 5e3,step = 5e3)[[1]] 
+  #width: width of each tile, 
+  #step: distance between the start positions of the sliding windows.
+  GW_5kb_windows[[chrom]] = gr
+}
+
+GW_5kb_windows = GW_5kb_windows %>% unlist()
+
+length(GW_5kb_windows) #545114
+
+#remove windows overlappign blacklist
+GW_5kb_windows <- GW_5kb_windows[ !GW_5kb_windows %over% mm10_blacklist]
+length(GW_5kb_windows) #493982
+```
+
+#### 1.2 Count 5kb bin signals
+```{r}
+#count signals
+histone_5kb <-  matrix(0, ncol= length(bw), nrow=length(GW_5kb_windows))
+colnames(histone_5kb) = names(bw)
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  histone_5kb[,sample] = calcPeaksSignal(GW_5kb_windows, bw_file)$meanScore
+}
+
+head(histone_5kb)
+histone_5kb <- as.data.frame(histone_5kb)
+histone_5kb$chr <- as.character(seqnames(GW_5kb_windows))
+histone_5kb$start <- start(GW_5kb_windows)
+histone_5kb$end <- end(GW_5kb_windows)
+saveRDS(histone_5kb, "./R_output/251123_H2Aub_K27me3_K27ac_5kb_bin_signals.rds")
+
+#count signals for each replicates
+histone4cor <-  matrix(0, ncol= length(bw2), nrow=length(GW_5kb_windows))
+colnames(histone4cor) = names(bw2)
+
+for(sample in names(bw2)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw2[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  histone4cor[,sample] = calcPeaksSignal(GW_5kb_windows, bw_file)$meanScore
+}
+
+head(histone4cor)
+
+saveRDS(histone4cor, "./R_output/251123_K27me3_K27ac_5kb_bin_for_correlation.rds")
+```
+#### 1.3 Scatter plot
+
+
+```{r}
+#Fig. S3a in manuscript
+#log_histone_5kb <- log2(histone_5kb[, c()])
+
+histone4cor <- readRDS("./R_output/251123_K27me3_K27ac_5kb_bin_for_correlation.rds")
+loghistone4cor <- log2(histone4cor+0.01)
+  
+pdf("./figures/251123_K27me3_K27ac_5kb_bin_smoothScatter.pdf", width = 5, height = 5)
+smoothScatter(loghistone4cor[,1], 
+              loghistone4cor[,3], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR", 
+              xlim = c(-2, 6),
+              ylim = c(-2, 6), )
+
+smoothScatter(loghistone4cor[,2], 
+              loghistone4cor[,4], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO",
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(loghistone4cor[,5], 
+              loghistone4cor[,6], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27ac CTR",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,7], 
+              loghistone4cor[,8], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27ac CKO",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,9], 
+              loghistone4cor[,10], 
+              xlab = "Rep3 (log2FPKM)",
+              ylab = "Rep4 (log2FPKM)",
+              main = "H3K27ac CTR",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,11], 
+              loghistone4cor[,12], 
+              xlab = "Rep3 (log2FPKM)",
+              ylab = "Rep4 (log2FPKM)",
+              main = "H3K27ac CKO",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+dev.off()
+
+cor(loghistone4cor[,1], loghistone4cor[,3])
+#0.78
+cor(loghistone4cor[,2], loghistone4cor[,4])
+#0.79
+cor(loghistone4cor[,5], loghistone4cor[,6])
+#0.82
+cor(loghistone4cor[,7], loghistone4cor[,8])
+#0.91
+cor(loghistone4cor[,9], loghistone4cor[,10])
+#0.86
+cor(loghistone4cor[,11], loghistone4cor[,12])
+#0.83
+```
+
+### 2. Metaplot 
+Refers to "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/251123_K27ac_K27me3_GV_scaled_domain"
+
+
+```{bash}
+#Fig. 2c in manuscript
+#bigwig samples--------------------------------
+CTR_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/GV_CTR_H2Aub_merged.bw"
+CKO_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw"
+CTR_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/BAP1_GV_CTR_K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"
+CKO_K27me3="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/BAP1_GV_CKO_K27me3_rep2_scaled.bw"
+CTR_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/CTR_K27ac_rep3_4_merged.bw"
+CKO_K27ac="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/251120_BAP1_GV_CRs_merged_scaled/bigwigs/CKO_K27ac_rep3_4_scaled.bw"
+
+GV_H2Aub_domain="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/HMMDomains/GV_CTR_H2Aub_merged_5_domains.bed"
+GV_K27me3_domain="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/HMMDomains/GV_CTR_K27me3_merged_5_domains.bed"
+GV_K27ac_domain="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/HMMDomains/GV_CTR_K27ac_merged_5_domains.bed"
+
+#computeMatrix scale-regions \
+#	-S $CTR_H2Aub $CKO_H2Aub  \
+#	-R $GV_H2Aub_domain \
+#	-a 2000 -b 2000 \
+#	-m 6000 \
+#	--outFileName 250308.H2Aub.GV.mat.gz \
+#	--sortRegions 'descend' \
+#	--samplesLabel  'C_H2Aub' 'K_H2Aub'  \
+#	--outFileNameMatrix  251123.H2Aub.GV.matrix \
+#	--missingDataAsZero \
+#	--sortUsingSamples 1 
+
+#computeMatrix scale-regions \
+#        -S $CTR_K27me3 $CKO_K27me3  \
+#        -R $GV_K27me3_domain \
+#        -a 2000 -b 2000 \
+#        -m 6000 \
+#        --outFileName 250308.K27me3.GV.mat.gz \
+#        --sortRegions 'descend' \
+#        --samplesLabel  'C_K27me3' 'K_K27me3'  \
+#        --outFileNameMatrix  251123.K27me3.GV.matrix \
+##        --missingDataAsZero \
+#        --sortUsingSamples 1
+
+#computeMatrix scale-regions \
+#        -S $CTR_K27ac $CKO_K27ac  \
+#        -R $GV_K27ac_domain \
+#        -a 2000 -b 2000 \
+#        -m 6000 \
+#        --outFileName 250308.K27ac.GV.mat.gz \
+#        --sortRegions 'descend' \
+#        --samplesLabel  'C_K27ac' 'K_K27ac'  \
+#        --outFileNameMatrix  251123.K27ac.GV.matrix \
+#        --missingDataAsZero \
+#       --sortUsingSamples 1
+
+#for k in 1 2 3 4 5
+#do
+	plotHeatmap --matrixFile 250308.H2Aub.GV.mat.gz \
+	    --outFileName 251123.H2Aub.GV.mat.pdf \
+	    --outFileSortedRegions 251123.H2Aub.GV.mat.bed \
+	    --dpi 300 \
+	    --sortRegions "descend" \
+	    --colorMap 'Blues' \
+	    --boxAroundHeatmaps no \
+	    --legendLocation "lower-center" \
+	    --sortUsingSamples 1 \
+	    --zMax 15 15 
+#done
+plotHeatmap --matrixFile 250308.K27me3.GV.mat.gz \
+            --outFileName 251123.K27me3.GV.mat.pdf \
+            --outFileSortedRegions 251123.K27me3.GV.mat.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'YlGn' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 1 \
+            --zMax 12 12 
+
+plotHeatmap --matrixFile 250308.K27ac.GV.mat.gz \
+            --outFileName 251123.K27ac.GV.mat.pdf \
+            --outFileSortedRegions 251123.K27ac.GV.mat.bed \
+            --dpi 300 \
+            --sortRegions "descend" \
+            --colorMap 'RdYlBu_r' \
+            --boxAroundHeatmaps no \
+            --legendLocation "lower-center" \
+            --sortUsingSamples 1 \
+            --zMax 6 6
+```
+
+### 3. K27ac/K27me3 changes
+
+#### 3.1 classification 5kb bins
+```{r}
+histone_5kb <- readRDS("./R_output/250319_H2Aub_K27me3_K27ac_5kb_bin_signals.rds")
+
+histone_5kb$group <- rep("0", nrow(histone_5kb))
+histone_5kb$log2K27me3 <- log2(histone_5kb$CKO_K27me3 + 0.1) - 
+                          log2(histone_5kb$CTR_K27me3 + 0.1)
+histone_5kb$log2K27ac <- log2(histone_5kb$CKO_K27ac + 0.1) -
+                         log2(histone_5kb$CTR_K27ac + 0.1)
+FC = 1.5
+FPKM = 2 #average > 1
+
+for(i in 1:nrow(histone_5kb)){
+      
+      if(histone_5kb$CTR_K27ac[i] + histone_5kb$CKO_K27ac[i] >= 2){
+          #K27ac signal present
+          if(histone_5kb$log2K27ac[i] <= -log2(FC)){
+            #K27ac signal lost
+            histone_5kb$group[i] <- "K27ac_lost"
+          } else if(histone_5kb$log2K27ac[i] >= log2(FC)){
+              histone_5kb$group[i] <- "K27ac_gain"
+          } else {
+               histone_5kb$group[i] <- "K27ac_no_change"
+          }
+      }  else if(histone_5kb$CTR_K27me3[i] + histone_5kb$CKO_K27me3[i] >= 2){
+           #K27me3 signal present
+          if(histone_5kb$log2K27me3[i] <= -log2(FC)){
+              histone_5kb$group[i] <- "K27me3_lost"
+          } else if (histone_5kb$log2K27me3[i] >= log2(FC)){
+                histone_5kb$group[i] <= "K27me3_gain"
+          } else {
+              histone_5kb$group[i] <- "K27me3_no_change"
+          }
+       }
+}
+saveRDS(histone_5kb, "./R_output/250319_H2Aub_K27me3_K27ac_5kb_bin_signals_grouped.rds")
+nrow(histone_5kb) #493982
+
+test <- histone_5kb[which(histone_5kb$group != 0),]
+nrow(test) #474315
+table(test$group)
+write.table(test[which(test$group == "K27ac_no_change"), 
+                 c("chr", "start", "end")], 
+                 file = "./R_output/250319_K27ac_no_change_5kb_bin.bed",
+                 quote = F, row.names = F, sep = "\t", col.names = F)
+write.table(test[which(test$group == "K27ac_lost"), 
+                 c("chr", "start", "end")], 
+                 file = "./R_output/250319_K27ac_lost_5kb_bin.bed",
+                 quote = F, row.names = F, sep = "\t", col.names = F)
+# write.table(test[which(test$group == "K27ac_gain"), 
+#                  c("chr", "start", "end")], 
+#                  file = "./R_output/250319_K27ac_gain_5kb_bin.bed",
+#                  quote = F, row.names = F, sep = "\t", col.names = F)
+# write.table(test[which(test$group == "K27me3_lost"), 
+#                  c("chr", "start", "end")], 
+#                  file = "./R_output/250319_K27me3_lost_5kb_bin.bed",
+#                  quote = F, row.names = F, sep = "\t", col.names = F)
+# write.table(test[which(test$group == "K27me3_no_change"), 
+#                  c("chr", "start", "end")], 
+#                  file = "./R_output/250319_K27me3_no_change_5kb_bin.bed",
+#                  quote = F, row.names = F, sep = "\t", col.names = F)
+```
+#### 3.2 merge 5kb bins
+
+```{bash}
+#merge using bed tools
+bedtools merge -d 10 -i 250319_K27ac_lost_5kb_bin.bed > 250319_K27ac_lost_5kb_bin_merged.bed
+bedtools merge -d 10 -i 250319_K27ac_no_change_5kb_bin.bed > 250319_K27ac_no_change_5kb_bin_merged.bed
+bedtools merge -d 10 -i 250319_K27me3_no_change_5kb_bin.bed > 250319_K27me3_no_change_5kb_bin_merged.bed
+```
+
+#### 3.3 count signals over merged bed
+```{r}
+K27ac_no_change <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_no_change_5kb_bin_merged.bed")
+K27ac_lost <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_lost_5kb_bin_merged.bed")
+
+length(K27ac_no_change) #40903
+length(K27ac_lost) #19035
+
+K27ac_no_change$group <- "K27ac_no_change"
+K27ac_lost$group <- "K27ac_lost"
+
+K27ac_bed <- c(K27ac_no_change, K27ac_lost)
+length(K27ac_bed) #59938
+
+#count signals
+K27ac_bed_mat <-  matrix(0, ncol= length(bw), nrow=length(K27ac_bed))
+colnames(K27ac_bed_mat) = names(bw)
+
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  K27ac_bed_mat[,sample] = calcPeaksSignal(K27ac_bed, bw_file)$meanScore
+}
+
+head(K27ac_bed_mat)
+K27ac_bed_df <- as.data.frame(K27ac_bed_mat)
+K27ac_bed_df$chr <- as.character(seqnames(K27ac_bed))
+K27ac_bed_df$start <- start(K27ac_bed)
+K27ac_bed_df$end <- end(K27ac_bed)
+K27ac_bed_df$group <- K27ac_bed$group
+saveRDS(K27ac_bed_df, "./R_output/251123_H2Aub_K27me3_K27ac_5kb_bin_merged_signals.rds")
+
+K27ac_bed_df <- readRDS("./R_output/251123_H2Aub_K27me3_K27ac_5kb_bin_merged_signals.rds")
+head(K27ac_bed_df)
+
+#only keep regions > 5kb
+K27ac_bed_df <- K27ac_bed_df[which(
+  K27ac_bed_df$end - K27ac_bed_df$start > 5100),]
+
+table(K27ac_bed_df$group) 
+#K27ac_lost K27ac_no_change 
+#           9043           27287
+
+# K27ac_bed_df$log2FC_K27ac <- 
+#   log2(K27ac_bed_df$CKO_K27ac+ 0.01) - log2(K27ac_bed_df$CTR_K27ac+0.01)
+# View(K27ac_bed_df)
+# test <- K27ac_bed_df[which(
+#   K27ac_bed_df$chr == "chr11" &
+#   K27ac_bed_df$start >= 3944000 &
+#   K27ac_bed_df$end <= 3950000),]
+# View(test)
+
+#the bed files used for downstream analyses
+write.table(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),
+                         c("chr", "start", "end")], 
+            file = "./R_output/251123_K27ac_lost_domains.bed", 
+            sep = "\t", quote = F, row.names = F, col.names = F)
+write.table(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),
+                         c("chr", "start", "end")], 
+            file = "./R_output/251123_K27ac_noChange_domains.bed", 
+            sep = "\t", quote = F, row.names = F, col.names = F)
+
+write.table(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),
+                         c("chr", "start", "end")], 
+            file = "./R_output/251123_K27ac_lost_domains.txt", 
+            sep = "\t", quote = F, row.names = F, col.names = F)
+```
+#### 3.4 visualization by boxplot
+```{r}
+library(reshape2)
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+library(ggsci)
+
+# pdf("./figures/250319_H2Aub_K27me3_RNA_GV_htp.pdf", width = 6, height = 8)
+# Heatmap(as.matrix(K27ac_bed_df[, c("CTR_K27ac", "CKO_K27ac")]), 
+#         col = colorRamp2(c(0, 2, 4, 6, 8), 
+#                          c("#4575B4", "#9DCDE3", "#EFE9C4","#FA9D59", "#D73027")), 
+#         cluster_columns = F, show_row_names = F,
+#         row_split = c(rep("no change", length(K27ac_no_change)), 
+#                       rep("lost", length(K27ac_lost))),
+#         use_raster = TRUE)  +
+# Heatmap(as.matrix(K27ac_bed_df[, c("CTR_K27me3", "CKO_K27me3")]), 
+#         col = colorRamp2(c(0, 2, 4, 6, 8), 
+#                          c("#4575B4", "#9DCDE3", "#EFE9C4","#FA9D59", "#D73027")), 
+#         cluster_rows = F, cluster_columns = F, show_row_names = F, 
+#         row_split = c(rep("no change", length(K27ac_no_change)), 
+#                       rep("lost", length(K27ac_lost))),
+#         use_raster = TRUE) +
+# Heatmap(as.matrix(K27ac_bed_df[, c("CTR_H2Aub", "CKO_H2Aub")]), 
+#         col = colorRamp2(c(0, 3, 6, 9, 12), 
+#                          c("#4575B4", "#9DCDE3", "#EFE9C4","#FA9D59", "#D73027")), 
+#         cluster_columns = F, show_row_names = F,
+#         use_raster = TRUE)  
+# dev.off()
+
+#do some stats test
+#K27ac:  CTR lost vs. no change
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_K27ac")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_K27ac")])
+wil$p.value # 9.629714e-281
+
+#K27me3: CTR lost vs. no change
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_K27me3")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_K27me3")])
+wil$p.value #0
+
+#H2Aub: CTR lost vs no change
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_H2Aub")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_H2Aub")])
+wil$p.value #0.3
+
+#K27ac lost: CTR K27ac vs. CKO K27ac
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_K27ac")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CKO_K27ac")])
+wil$p.value
+#[1] 0
+
+#K27ac no change: CTR K27ac vs. CKO K27ac
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_K27ac")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CKO_K27ac")])
+wil$p.value 
+#2.50803e-05
+
+#K27ac lost: CTR K27me3 vs. CKO K27me3
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_K27me3")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CKO_K27me3")])
+wil$p.value
+#[1] 0
+
+#K27ac no change: CTR K27me3 vs. CKO K27me3
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_K27me3")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CKO_K27me3")])
+wil$p.value
+#[1] 0
+
+#K27ac lost: CTR H2Aub vs. CKO H2Aub
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CTR_H2Aub")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"),c("CKO_H2Aub")])
+wil$p.value
+#[1] 0
+
+#K27ac no change: CTR H2Aub vs. CKO H2Aub
+wil <- wilcox.test(
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CTR_H2Aub")],
+K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"),c("CKO_H2Aub")])
+wil$p.value
+#[1] 0
+
+#fig. S3c in manuscript
+pdf("./figures/251123_K27ac_lossVSnochange_boxplot_GV.pdf", width = 2, height = 2)
+K27ac_long_df <- pivot_longer(K27ac_bed_df[, c("CTR_K27ac", "CKO_K27ac", "group")],
+                            -c(group), values_to = "signal", names_to = "Group")
+K27ac_long_df$Group <- factor(K27ac_long_df$Group, 
+                            levels = c("CTR_K27ac", "CKO_K27ac"))
+
+ggplot(K27ac_long_df, aes(x = group, y = signal, color = Group)) + 
+  geom_boxplot(outlier.color = NA) + 
+  ylab("H3K27ac (FPKM)") + 
+  ylim(0, 10) + 
+  scale_x_discrete(
+      labels= c("loss", "no_change")) +
+  theme_cowplot(10) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "top") +
+  scale_color_npg()
+dev.off()
+
+pdf("./figures/251123_K27me3_lossVSnochange_boxplot_GV.pdf", width = 2, height = 2)
+K27me3_long_df <- pivot_longer(K27ac_bed_df[, c("CTR_K27me3", "CKO_K27me3", "group")],
+                            -c(group), values_to = "signal", names_to = "Group")
+K27me3_long_df$Group <- factor(K27me3_long_df$Group, 
+                            levels = c("CTR_K27me3", "CKO_K27me3"))
+
+ggplot(K27me3_long_df, aes(x = group, y = signal, color = Group)) + 
+  geom_boxplot(outlier.color = NA) + 
+  ylab("H3K27me3 (FPKM)") + 
+  ylim(0, 15) + 
+  scale_x_discrete(
+      labels= c("loss", "no_change")) +
+  theme_cowplot(10) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "top") +
+  scale_color_npg()
+dev.off()
+
+
+
+pdf("./figures/251123_H2Aub_lossVSnochange_boxplot_GV.pdf", width = 2, height = 2)
+H2Aub_long_df <- pivot_longer(K27ac_bed_df[, c("CTR_H2Aub", "CKO_H2Aub", "group")],
+                            -c(group), values_to = "signal", names_to = "Group")
+H2Aub_long_df$Group <- factor(H2Aub_long_df$Group, 
+                            levels = c("CTR_H2Aub", "CKO_H2Aub"))
+
+ggplot(H2Aub_long_df, aes(x = group, y = signal, color = Group)) + 
+  geom_boxplot(outlier.color = NA) + 
+  ylab("H3K27me3 (FPKM)") + 
+  ylim(0, 20) + 
+  scale_x_discrete(
+      labels= c("loss", "no_change")) +
+  theme_cowplot(10) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "top") +
+  scale_color_npg()
+dev.off()
+```
+
+#### 3.5 distribution of K27ac lost regions
+
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+suppressMessages(library(ggsci))
+suppressMessages(library(reshape2))
+suppressMessages(library(tidyr))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(readxl))
+source("./utils.R")
+
+mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf")
+
+#Annotate peak to gene features
+
+K27ac_lost <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_lost_5kb_bin_merged.bed")
+length(K27ac_lost) #19035
+
+K27ac_no_change <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_no_change_5kb_bin_merged.bed")
+length(K27ac_no_change) #40903
+
+K27ac_lost <- K27ac_lost[width(K27ac_lost)>5100] 
+length(K27ac_lost) #9043
+K27ac_no_change <- K27ac_no_change[width(K27ac_no_change)>5100] 
+length(K27ac_no_change) #27287
+
+lost_annotation <- annotatePeak(K27ac_lost, tssRegion = c(-2500, 2500),
+                           TxDb = mm10_gene_annotation)
+lost_annotation <- as.GRanges(lost_annotation)
+lost_annotation$simpleAnnotation <- simplifyAnnotation(lost_annotation$annotation)
+
+noChange_annotation <- annotatePeak(K27ac_no_change, tssRegion = c(-2500, 2500),
+                           TxDb = mm10_gene_annotation)
+noChange_annotation <- as.GRanges(noChange_annotation)
+noChange_annotation$simpleAnnotation <- simplifyAnnotation(noChange_annotation$annotation)
+
+table(lost_annotation$simpleAnnotation)
+#Intergenic Intragenic   Promoter 
+#      4505       1752       2786 
+
+table(noChange_annotation$simpleAnnotation)
+#Intergenic Intragenic   Promoter 
+#      8124       4727      14436 
+
+
+lost_df <- data.frame(seqnames = seqnames(lost_annotation),
+             domain_start = start(lost_annotation),
+             domain_end = end(lost_annotation),
+             strand = strand(lost_annotation),
+             annotation = lost_annotation$annotation,
+             id = lost_annotation$geneId,
+             distanceToTss = lost_annotation$distanceToTSS,
+             simpleAnnotation = lost_annotation$simpleAnnotation)
+nrow(lost_df)
+write.csv(
+  lost_df,
+  "./R_output/251124_K27ac_lost_domains_annotation.csv", 
+  quote = F, row.names = F)
+
+nochange_df <- data.frame(seqnames = seqnames(noChange_annotation),
+             domain_start = start(noChange_annotation),
+             domain_end = end(noChange_annotation),
+             strand = strand(noChange_annotation),
+             annotation = noChange_annotation$annotation,
+             id = noChange_annotation$geneId,
+             distanceToTss = noChange_annotation$distanceToTSS,
+             simpleAnnotation = noChange_annotation$simpleAnnotation)
+nrow(nochange_df)
+
+write.table(
+  nochange_df,
+  "./R_output/251124_K27ac_nochange_domains_annotation.tsv", 
+  sep = "\t", quote = F, row.names = F
+)
+
+df4pie1 <- as.data.frame(table(lost_annotation$simpleAnnotation)) %>%
+              mutate(perc = `Freq` / sum(`Freq`)) %>% 
+              mutate(labels = scales::percent(perc))
+
+df4pie2 <- as.data.frame(table(noChange_annotation$simpleAnnotation)) %>%
+              mutate(perc = `Freq` / sum(`Freq`)) %>% 
+              mutate(labels = scales::percent(perc))
+
+#fig 2e in manuscript
+pdf("./figures/251124_GV_K27ac_lost_annotation.pdf", height = 3, width = 3)
+
+    ggplot(df4pie1, aes(x = "", y = perc, fill = Var1)) +
+        geom_col(color = "black") +
+        coord_polar(theta = "y") + 
+        geom_text(aes(label = labels),
+        position = position_stack(vjust = 0.5)) +
+        guides(fill = guide_legend(title = NULL)) +
+        scale_fill_npg() +
+        #geom_label(aes(label = labels), 
+        #           color = rep("black", nrow(df4cas9Pie)),
+        #           position = position_stack(vjust = 0.1),
+        #show.legend = FALSE) + 
+        theme_void() 
+    ggplot(df4pie2, aes(x = "", y = perc, fill = Var1)) +
+        geom_col(color = "black") +
+        coord_polar(theta = "y") + 
+        geom_text(aes(label = labels),
+        position = position_stack(vjust = 0.5)) +
+        guides(fill = guide_legend(title = NULL)) +
+        scale_fill_npg() +
+        #geom_label(aes(label = labels), 
+        #           color = rep("black", nrow(df4cas9Pie)),
+        #           position = position_stack(vjust = 0.1),
+        #show.legend = FALSE) + 
+        theme_void() 
+dev.off()
+```
+#### 3.6 K27ac vs. gene expression 
+```{r}
+gv_DESeq_rpkm <- read.csv("./R_output/250315_BAP1_gv_genes_DE_analyses.csv")
+nrow(gv_DESeq_rpkm) #20540
+
+gv_DESeq_rpkm <- gv_DESeq_rpkm[
+  which(gv_DESeq_rpkm$gv_DESeq_rpkm.group != "low_expression_level"),]
+nrow(gv_DESeq_rpkm) #13571
+
+#head(lost_annotation)
+
+RNA_lost_promoter <- gv_DESeq_rpkm[which(
+  gv_DESeq_rpkm$id %in% lost_annotation[which(
+    lost_annotation$simpleAnnotation == "Promoter"
+  ), ]$geneId
+),]
+nrow(RNA_lost_promoter) #421
+table(RNA_lost_promoter$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#           151            269              1 
+
+RNA_lost_geneBody <- gv_DESeq_rpkm[which(
+  gv_DESeq_rpkm$id %in% lost_annotation[which(
+    lost_annotation$simpleAnnotation == "Intragenic"
+  ), ]$geneId
+),]
+nrow(RNA_lost_geneBody) #285
+table(RNA_lost_geneBody$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#           115            169              1
+
+RNA_noChange_promoter <- gv_DESeq_rpkm[which(
+  gv_DESeq_rpkm$id %in% noChange_annotation[which(
+    lost_annotation$simpleAnnotation == "Promoter"
+  ), ]$geneId
+),]
+nrow(RNA_noChange_promoter) #807
+table(RNA_noChange_promoter$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#            84            719              4 
+
+#remove those with K27ac domain lost in promoter and gene bodies
+
+`%nin%` = Negate(`%in%`)
+RNA_noChange_promoter <- RNA_noChange_promoter[
+  which(RNA_noChange_promoter$id %nin% RNA_lost_promoter$id &
+        RNA_noChange_promoter$id %nin% RNA_lost_geneBody), ]
+nrow(RNA_noChange_promoter) #746
+table(RNA_noChange_promoter$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#            56            686              4
+RNA_noChange_geneBody <- gv_DESeq_rpkm[which(
+  gv_DESeq_rpkm$id %in% noChange_annotation[which(
+    lost_annotation$simpleAnnotation == "Intragenic"
+  ), ]$geneId
+),]
+nrow(RNA_noChange_geneBody) #480
+
+#remove those with K27ac domain lost in promoter and gene bodies
+
+`%nin%` = Negate(`%in%`)
+RNA_noChange_geneBody <- RNA_noChange_geneBody[
+  which(RNA_noChange_geneBody$id %nin% RNA_lost_promoter$id &
+        RNA_noChange_geneBody$id %nin% RNA_lost_geneBody), ]
+nrow(RNA_noChange_geneBody) #443
+
+table(RNA_noChange_geneBody$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#            34            406              2 
+
+boxplot(RNA_noChange_geneBody$log2FoldChange)
+
+#make a long table for plotting
+
+RNA_lost_promoter$group2 <- "lost_promoter"
+RNA_lost_geneBody$group2 <- "lost_geneBody"
+RNA_noChange_promoter$group2 <- "noChange_promoter"
+RNA_noChange_geneBody$group2 <- "noChange_geneBody"
+
+wil <- wilcox.test(RNA_lost_geneBody$log2FoldChange,
+            RNA_noChange_geneBody$log2FoldChange)
+wil$p.value
+
+
+df4boxplot <- rbind(RNA_lost_promoter, RNA_lost_geneBody,
+                    RNA_noChange_promoter, RNA_noChange_geneBody)
+
+#Fig. 2f in manuscript
+
+pdf("./figures/250320_log2FC_RNA_K27ac_lossVSnoChange_genes_boxplot.pdf", width = 5, height = 5)
+ggplot(df4boxplot, aes(x = group2, y = log2FoldChange, fill = group2)) +
+  geom_boxplot(outlier.color = NA) +
+  ylab("Log2 FC (CKO / CTR)") + ylim(-6, 2) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  # scale_x_discrete(
+  #     labels= c("Putative enhancer", "Promoter", "Gene body", "Intergenic")) +
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "none") +
+  #scale_color_aaas() +
+  scale_fill_aaas() 
+dev.off()
+```
+
+#### 3.7 check the gene expression dynamics in growing oocyte
+
+```{r}
+##From Chunxia's 2020 Snf2h Genes & Dev paper
+
+snf2h <- read_excel("./R_input/Snf2h_KO_RNA/supp_gad.331157.119_Supplemental_TableS1.xlsx", 
+                    sheet = 2, col_names = T)
+head(snf2h)
+
+gv_DESeq_rpkm2 <- merge(gv_DESeq_rpkm, snf2h, by = "id")
+
+table(gv_DESeq_rpkm2$gv_DESeq_rpkm.group)
+#down-regulated  similar_level   up-regulated 
+#           818          11227             71
+
+gv_DESeq_rpkm2$go1 <- log2((gv_DESeq_rpkm2$GO1_1 + gv_DESeq_rpkm2$GO1_2)/2 + 0.01)
+gv_DESeq_rpkm2$go2 <- log2((gv_DESeq_rpkm2$GO2_1 + gv_DESeq_rpkm2$GO2_2)/2 + 0.01)
+gv_DESeq_rpkm2$fgo <- log2((gv_DESeq_rpkm2$FGO1 + gv_DESeq_rpkm2$FGO2)/2 + 0.01)
+
+# library(pheatmap)
+# pheatmap(as.matrix(gv_DESeq_rpkm2[
+#   which(gv_DESeq_rpkm2$gv_DESeq_rpkm.group == "similar_level"),
+#   c("go1", "go2", "fgo")
+# ]))
+# 
+# pheatmap(as.matrix(gv_DESeq_rpkm2[
+#   which(gv_DESeq_rpkm2$gv_DESeq_rpkm.group == "down-regulated"),
+#   c("go1", "go2", "fgo")
+# ]))
+df4boxplot2 <- gather(gv_DESeq_rpkm2[, 
+                                     c("go1", "go2", "fgo", "gv_DESeq_rpkm.group")], 
+                      key = "group", value = "log2FPKM", -gv_DESeq_rpkm.group)
+
+df4boxplot2 <- df4boxplot2[-grep("up-regulated", df4boxplot2$gv_DESeq_rpkm.group),]
+
+df4boxplot2$group <- factor(df4boxplot2$group, 
+                            levels = c("go1", "go2", "fgo"))
+
+#fig 2j in manuscript
+pdf("./figures/250328_BAP1_DEG_in_growing_oocyte.pdf", width = 7, height = 5)
+ggplot(df4boxplot2, aes(x = gv_DESeq_rpkm.group, y = log2FPKM, color = group)) +
+  geom_boxplot(outlier.color = NA) +
+  ylab("Log2FPKM") + #ylim(-6, 2) +
+  #geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  # scale_x_discrete(
+  #     labels= c("Putative enhancer", "Promoter", "Gene body", "Intergenic")) +
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "none") #+
+  #scale_color_aaas() +
+  #scale_fill_aaas() 
+dev.off()
+
+#comparing GO1 GO2 vs. fgo
+wil1 <- wilcox.test(df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "down-regulated" & 
+                                      df4boxplot2$group == "go2"), 
+                                c("log2FPKM")],
+                    df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "down-regulated" & 
+                                      df4boxplot2$group == "fgo"), 
+                                c("log2FPKM")],)
+wil1$p.value #1.535843e-28
+
+wil2 <- wilcox.test(df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "down-regulated" & 
+                                      df4boxplot2$group == "go1"), 
+                                c("log2FPKM")],
+                    df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "down-regulated" & 
+                                      df4boxplot2$group == "go2"), 
+                                c("log2FPKM")],)
+wil2$p.value #0.9985385
+
+wil3 <- wilcox.test(df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "similar_level" & 
+                                      df4boxplot2$group == "go2"), 
+                                c("log2FPKM")],
+                    df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "similar_level" & 
+                                      df4boxplot2$group == "fgo"), 
+                                c("log2FPKM")],)
+wil3$p.value #0.6689535
+
+wil4 <- wilcox.test(df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "similar_level" & 
+                                      df4boxplot2$group == "go1"), 
+                                c("log2FPKM")],
+                    df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "similar_level" & 
+                                      df4boxplot2$group == "go2"), 
+                                c("log2FPKM")],)
+wil4$p.value #0.4579
+
+wil5 <- wilcox.test(df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "similar_level" & 
+                                      df4boxplot2$group == "fgo"), 
+                                c("log2FPKM")],
+                    df4boxplot2[which(df4boxplot2$gv_DESeq_rpkm.group == "down-regulated" & 
+                                      df4boxplot2$group == "fgo"), 
+                                c("log2FPKM")],)
+wil5$p.value #2.301874e-25
+
+#plot a heatmap for following genes
+
+#cdh2, Cdh18, Dsc2, Fgf10, Egfr, Gata3, Foxp2
+suppressMessages(library(readxl))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+
+
+gene4htp <- gv_DESeq_rpkm2[which(gv_DESeq_rpkm2$name.y %in% 
+                         c("Cdh2", "Cdh18", "Dsc2", "Dsc3", 
+                           "Fgf10",  "Foxp2", "Egfr", "Gata3")),
+                 c("name.y","go1", "go2", "fgo")]
+mat4htp <- as.matrix(
+              gene4htp[, c(2:4)]
+)
+row.names(mat4htp) <- gene4htp$name.y
+
+#FigS3f in manuscript
+pdf("./figures/250328_selective_gene_growing_oocyte.pdf", width = 4, height = 5)
+Heatmap(mat4htp, 
+        cluster_rows=T, cluster_columns=F, show_row_names=T, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+        col=colorRamp2(quantile(as.matrix(mat4htp), c(0, 0.5, 0.99)), 
+        c("#3A8DC0", "white", "#EAE65B")))
+dev.off()
+```
+
+
+
+#### 3.8 Gene dense/poor enrichment
+```{r}
+K27ac_no_change <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_no_change_5kb_bin_merged.bed")
+K27ac_lost <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_lost_5kb_bin_merged.bed")
+
+length(K27ac_no_change) #40903
+length(K27ac_lost) #19035
+
+K27ac_no_change <- K27ac_no_change[width(K27ac_no_change) > 5100]
+K27ac_lost <- K27ac_lost[width(K27ac_lost) > 5100]
+
+length(K27ac_no_change) #27287
+length(K27ac_lost) #9043
+
+summary(width(K27ac_lost))
+
+gene_dense <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/mm10_forest_sorted_merged.bed")
+gene_poor  <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/mm10_prairie_sorted_merged.bed")
+length(gene_dense) #2348
+length(gene_poor) #1790
+
+
+length(unique(queryHits(findOverlaps(K27ac_lost, gene_dense)))) #1424
+length(unique(queryHits(findOverlaps(K27ac_lost, gene_poor)))) #6377
+
+length(unique(queryHits(findOverlaps(K27ac_lost, gene_poor)))) / 
+  length(unique(queryHits(findOverlaps(K27ac_lost, gene_dense)))) #4.47 81%
+
+length(unique(queryHits(findOverlaps(K27ac_no_change, gene_poor)))) #15805
+length(unique(queryHits(findOverlaps(K27ac_no_change, gene_dense)))) #10485 
+
+length(unique(queryHits(findOverlaps(K27ac_no_change, gene_poor)))) / 
+length(unique(queryHits(findOverlaps(K27ac_no_change, gene_dense)))) #1.5
+
+sum(width(gene_poor)) / sum(width(gene_dense)) #1.7
+
+df4barplot <- data.frame(
+  group = rep(c("lost", "no_change", "random"), 2),
+  group2 = rep(c("poor", "dense"), 3),
+  value = c(
+    length(unique(queryHits(findOverlaps(K27ac_lost, gene_poor)))),
+    length(unique(queryHits(findOverlaps(K27ac_no_change, gene_dense)))),
+    sum(width(gene_poor)),
+    length(unique(queryHits(findOverlaps(K27ac_lost, gene_dense)))),
+    length(unique(queryHits(findOverlaps(K27ac_no_change, gene_poor)))),
+    sum(width(gene_dense))
+  )
+)
+
+library(ggplot2)
+library(cowplot)
+
+#Fig. 2g in manuscript
+pdf("./figures/20250320_K27ac_lost_GV_geneRichPoor_stack.pdf", 
+    width = 6, height = 5)
+ggplot(df4barplot, aes(x = group, y = value, fill = group2)) +
+  geom_bar(stat = "identity", position = "fill", color = "black") +  # "fill" scales bars to 100%
+  scale_y_continuous(labels = scales::percent_format()) +  # Convert y-axis to percentages
+  labs(title = "Stacked Bar Plot (100%)",
+       x = "Group",
+       y = "Percentage",
+       fill = "Group2") +
+  scale_fill_manual(values = c("poor" = "black", "dense" = "white")) + 
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank())
+dev.off()
+
+#chi-square test
+# Create a contingency table (rows = gender, columns = color preference)
+# Create a contingency table (rows = lost/noChange, columns = dense/poor)
+preference_data <- matrix(c(1424, 6377, 
+                            10485, 15805), nrow = 2, byrow = TRUE)
+
+# Assign row and column names
+rownames(preference_data) <- c("lost", "noChange")
+colnames(preference_data) <- c("dense", "poor")
+
+# Print the table
+print(preference_data)
+
+# Perform the Chi-square test
+chi_test <- chisq.test(preference_data)
+
+# Print the test result
+print(chi_test)
+
+# Pearson's Chi-squared test with Yates' continuity correction
+# 
+# data:  preference_data
+# X-squared = 1237.1, df = 1, p-value < 2.2e-16
+write.table(data.frame(
+  chr = seqnames(K27ac_lost),
+  start = start(K27ac_lost),
+  end = end(K27ac_lost)
+), file = "./R_output/250320_K27ac_lost_filter_5kb.bed", 
+quote = F, sep = "\t",row.names =  F, col.names = F)
+
+
+# write.table(test[which(test$group == "K27ac_gain"),
+#                  c("chr", "start", "end")],
+#                  file = "./R_output/250319_K27ac_gain_5kb_bin.bed",
+#                  quote = F, row.names = F, sep = "\t", col.names = F)
+
+
+# sum(width(gene_poor))/(sum(width(gene_dense))+sum(width(gene_poor)))  #0.74
+# # 
+# K27ac_bed_df_gr <- makeGRangesFromDataFrame(K27ac_bed_df,
+#                                             keep.extra.columns=T,
+#                                             ignore.strand=T,
+#                                             seqinfo=NULL)
+# K27ac_lost_gr <- K27ac_bed_df_gr[K27ac_bed_df_gr$group == "K27ac_lost"]
+# length(K27ac_lost_gr) #19035
+# 
+# K27ac_lost_poor <- K27ac_lost_gr[
+#   unique(queryHits(findOverlaps(K27ac_lost_gr, gene_poor)))]
+# K27ac_lost_dense <- K27ac_lost_gr[
+#   unique(queryHits(findOverlaps(K27ac_lost_gr, gene_dense)))]
+# 
+# K27ac_lost_poor$group2 <- "gene_poor"
+# K27ac_lost_dense$group2 <- "gene_dense"
+# 
+# K27ac_lost_gr <- c(K27ac_lost_poor, K27ac_lost_dense)
+# table(K27ac_lost_gr$group2)
+# 
+# K27ac_lost_gr$log2K27ac <- log2(K27ac_lost_gr$CKO_K27ac+0.01) - 
+#                            log2(K27ac_lost_gr$CTR_K27ac+0.01)
+# 
+# boxplot(K27ac_lost_gr[K27ac_lost_gr$group2 == "gene_poor"]$log2K27ac,
+#         K27ac_lost_gr[K27ac_lost_gr$group2 == "gene_dense"]$log2K27ac,
+#         ylim = c(-2, 0)
+# )
+# K27ac_lost <- c(K27ac)
+# length(K27ac_lost_poor) #12930
+# length(K27ac_lost_dense) #3843
+# boxplot(K27ac_lost_poor$CTR_K27ac,
+#         K27ac_lost_poor$CKO_K27ac,
+#         K27ac_lost_dense$CTR_K27ac,
+#         K27ac_lost_dense$CKO_K27ac)
+```
+
+#### 3.9 Overlap with P1/P7/P10 K27ac
+
+```{r}
+P7_K27ac <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250312_remap_WeiXie_K27ac_ATAC_GO/GO_P7_K27ac/GO_P7_K27ac_filtered.bed")
+P10_K27ac <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250312_remap_WeiXie_K27ac_ATAC_GO/GO_P10_K27ac/GO_P10_K27ac_filtered.bed")
+
+length(P7_K27ac) #60192
+length(P10_K27ac) #53363
+
+
+K27ac_no_change <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_no_change_5kb_bin_merged.bed")
+K27ac_lost <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_output/250319_K27ac_lost_5kb_bin_merged.bed")
+
+length(K27ac_no_change) #40903
+length(K27ac_lost) #19035
+
+#filter K7ac regions by 5kb
+K27ac_no_change <- K27ac_no_change[width(K27ac_no_change)>5000 ]
+K27ac_lost <- K27ac_lost[width(K27ac_lost)>5000]
+
+length(K27ac_no_change) #27287
+length(K27ac_lost) #9043
+
+length(unique(queryHits(findOverlaps(K27ac_lost, P7_K27ac)))) #897 (897/9043= 9.9)
+length(unique(queryHits(findOverlaps(K27ac_lost, P10_K27ac)))) #1211 (1211/9043= 13.4)
+
+length(unique(queryHits(findOverlaps(K27ac_no_change, P7_K27ac)))) #13363 (49%)
+length(unique(queryHits(findOverlaps(K27ac_no_change, P10_K27ac)))) #15805 (57.9%)
+
+#stacked bar plot showing the overlap 
+
+#Fig. S3e in manuscript
+pdf("./figures/250320_pieChart_K27ac_vs_GOpeaks.pdf",
+    width = 5, height =5)
+pie(c(897, 9043-897))
+pie(c(1211, 9043-1211))
+pie(c(13363, 27287-13363))
+pie(c(15805, 27287-15805))
+dev.off()
+```
+
+### 4. K27ac across different stages
+
+```{r}
+path1 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs"
+path2 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250612_remap_WeiXie_K27ac/bigwigs"
+path3 <- "/Volumes/ZYChenlab/Shared_browser_tracks/Public_browser_tracks/2022_p300CBP_GSE207222"
+path4 <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/normalized_bw"
+bw <- list(
+  #CTR_K27ac  = paste0(path1, "/GV_CTR_K27ac_merged.bw"),
+  #CKO_K27ac  = paste0(path1, "/GV_CKO_K27ac_merged.bw"),
+  #FGO_K27ac = paste0(path3, "/GSM6281808_H3K27ac_GV.bigwig"),
+  #FGO_K27ac_xie = paste0(path2, "/FGO_K27ac_merged.bw"),
+  #zygote_K27ac = paste0(path3, "/GSM6281810_H3K27ac_zygote.bigwig"),
+  #PN5_K27ac_xie = paste0(path2, "/pn5_rep1_mm10.sorted.multi.Q30.dedup.bw"),
+  #early2C_K27ac = paste0(path3, "/GSM6281811_H3K27ac_early2C.bigwig"),
+  #e2c_K27ac_xie = paste0(path2, "/e2c_K27ac_merged.bw"),
+  #late2C_K27ac = paste0(path3, "/GSM6281812_H3K27ac_late2C.bigwig"),
+  #l2c_K27ac_xie = paste0(path2, "/l2c_K27ac_merged.bw")
+  #morula_K27ac = paste0(path3, "/GSM6281813_H3K27ac_morula.bigwig"),
+  P1_NGO_K27ac = paste0(path4, "/WT_CT_P1NGO_Ac_RPKM.bw")
+  #P7_GO_K27ac = paste0(path2, "/GO_P7_K27ac_merged.bw"),
+  #P10_GO_K27ac = paste0(path2, "/GO_P10_K27ac_merged.bw"),
+  # c8_K27ac = paste0(path2, "/c8_K27ac_merged.bw"),
+  # icm_K27ac = paste0(path2, "/icm_K27ac_merged.bw"),
+  # E65epi_K27ac = paste0(path2, "/E65epi_K27ac_merged.bw"),
+  # E65ve_K27ac = paste0(path2, "/E65ve_K27ac_merged.bw"),
+  # E75ect_K27ac = paste0(path2, "/E75ect_K27ac_merged.bw"),
+  # E75end_K27ac = paste0(path2, "/E75end_K27ac_merged.bw"),
+  # E75mes_K27ac = paste0(path2, "/E75mes_K27ac_merged.bw"),
+  # E75ps_K27ac = paste0(path2, "/E75ps_K27ac_merged.bw")
+) 
+
+bw_list <- list()
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  bw_list$sample <- import.bw(bw_file)
+
+  #filter by blacklist
+  tmp1 <- subsetByOverlaps(bw_list$sample, mm10_blacklist, invert = T)
+  
+  #calculate z score
+  tmp1$score2 <- (tmp1$score - mean(tmp1$score)) / sd(tmp1$score)
+  
+  #output
+  tmp2 <- tmp1
+  mcols(tmp2)$score <- NULL
+  names(mcols(tmp2)) <- "score"
+  export(tmp2, con=paste0("./normalized_bw/", sample, "_normalized.bw"),
+       format = "bigWig")
+}
+```
+
+```{r}
+K27ac_lost <- import.bed("./R_output/250612_K27ac_lost_domains.bed")
+length(K27ac_lost) #9403
+path_norm <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/normalized_bw"
+
+bw_norm <- list(
+  CTR_K27ac = paste0(path_norm, "/CTR_K27ac_normalized.bw"),
+  CKO_K27ac = paste0(path_norm, "/CKO_K27ac_normalized.bw"),
+  P1_NGO = paste0(path_norm, "/P1_NGO_K27ac_normalized.bw"),
+  P7_GO = paste0(path_norm, "/P7_GO_K27ac_normalized.bw"),
+  P10_GO = paste0(path_norm, "/P10_GO_K27ac_normalized.bw"),
+  FGO = paste0(path_norm, "/FGO_K27ac_normalized.bw")
+  # FGO = paste0(path_norm, "/FGO_K27ac_xie_normalized.bw"),
+  #zygote = paste0(path_norm, "/zygote_K27ac_normalized.bw"),
+  # zygote = paste0(path_norm, "/PN5_K27ac_xie_normalized.bw"),
+  #early2c = paste0(path_norm, "/early2C_K27ac_normalized.bw"),
+  # early2c = paste0(path_norm, "/e2c_K27ac_xie_normalized.bw"),
+  #late2c = paste0(path_norm, "/late2C_K27ac_normalized.bw"),
+  # late2c = paste0(path_norm, "/l2c_K27ac_xie_normalized.bw"),
+  # c8 = paste0(path_norm, "/c8_K27ac_normalized.bw"),
+  # morula = paste0(path_norm, "/morula_K27ac_normalized.bw"),
+  # icm = paste0(path_norm, "/icm_K27ac_normalized.bw"),
+  # e65epi = paste0(path_norm, "/E65epi_K27ac_normalized.bw"),
+  # e65ve = paste0(path_norm, "/E65ve_K27ac_normalized.bw"),
+  # e75ect = paste0(path_norm, "/E75ect_K27ac_normalized.bw"),
+  # e75end = paste0(path_norm, "/E75end_K27ac_normalized.bw"),
+  # e75mes = paste0(path_norm, "/E75mes_K27ac_normalized.bw"),
+  # e75ps = paste0(path_norm, "/E75ps_K27ac_normalized.bw")
+) 
+
+#count signals
+K27ac_mat <-  matrix(0, ncol= length(bw_norm), nrow=length(K27ac_lost))
+colnames(K27ac_mat) = names(bw_norm)
+
+
+for(sample in names(bw_norm)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw_norm[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  K27ac_mat[,sample] = calcPeaksSignal(K27ac_lost, bw_file)$meanScore
+}
+
+# head(K27ac_bed_mat)
+# K27ac_bed_df <- as.data.frame(K27ac_bed_mat)
+# K27ac_bed_df$chr <- as.character(seqnames(K27ac_bed))
+# K27ac_bed_df$start <- start(K27ac_bed)
+# K27ac_bed_df$end <- end(K27ac_bed)
+# K27ac_bed_df$group <- K27ac_bed$group
+
+#K27ac_mat2 <- K27ac_mat[, -c(5:8, 10)]
+
+# Heatmap(K27ac_mat, 
+#         cluster_rows=F, cluster_columns=F, show_row_names=F, column_names_side="top",
+#         cluster_row_slices=F, border='black', column_names_rot = 45,
+#         row_names_gp = gpar(fontface = "italic"),
+#         row_title_rot=0, 
+#         #show_row_dend = FALSE,
+#         row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+#         heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+#         col=colorRamp2(quantile(as.matrix(K27ac_mat), c(0.01, 0.5, 0.99)), 
+#         #col=colorRamp2(quantile(as.matrix(K27ac_mat2), c(0.01, 0.99)),
+#         #col=colorRamp2(c(-1, 0, 0.3),
+#         #col= colorRamp2(c(-0.5, 0.5),
+#         #c("white", "#C74236")))
+#         c("#507BA9", "white", "#C74236")))
+
+
+#Fig. 2h in manuscript
+
+K27ac_mat2 <- K27ac_mat[, c(1:4)]
+pdf("./figures/251124_K27ac_down_inP7_P10_FGO.pdf", width = 6, height = 4)
+Heatmap(K27ac_mat[, c(1:6)], 
+        cluster_rows=F, cluster_columns=F, show_row_names=F, column_names_side="top",
+        cluster_row_slices=F, border='black', column_names_rot = 45,
+        row_names_gp = gpar(fontface = "italic"),
+        row_title_rot=0, 
+        #show_row_dend = FALSE,
+        row_title_gp=gpar(fontsize=9), width=unit(90, "mm"),
+        heatmap_legend_param=list(legend_direction="vertical", title="log2(FPKM)"),
+       col=colorRamp2(quantile(as.matrix(K27ac_mat2), c(0.01, 0.5, 0.99)), 
+        #col=colorRamp2(quantile(as.matrix(K27ac_mat2), c(0.01, 0.99)),
+        #col=colorRamp2(c(-1, 0, 0.3),
+        #col= colorRamp2(c(-0.8, 0, 0.2),
+        #c("white", "#C74236")))
+        c("#507BA9", "white", "#C74236")))
+        #col=colorRamp2(c(0, 0.1),
+        #c("white", "#C74236")))
+dev.off()
+```
+
+### 5. Scatter plot analyses of K27ac/K27me3/H2Aub (10/20/2025)
+
+```{r}
+K27ac_bed_df <- readRDS("./R_output/250319_H2Aub_K27me3_K27ac_5kb_bin_merged_signals.rds")
+head(K27ac_bed_df)
+
+#only keep regions > 5kb
+K27ac_bed_df <- K27ac_bed_df[which(
+  K27ac_bed_df$end - K27ac_bed_df$start > 5100),]
+
+table(K27ac_bed_df$group) 
+#K27ac_lost K27ac_no_change 
+#           9043           27287 
+
+summary(K27ac_bed_df$CTR_H2Aub)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 0.2567  2.0939  2.7865  3.2744  3.9050 16.3033
+summary(K27ac_bed_df$CKO_H2Aub)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   1.616   8.319  10.251  10.374  12.226  27.564 
+
+summary(K27ac_bed_df$CTR_K27me3)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# 0.0000  0.4896  1.1762  2.1340  2.8763 21.4762 
+
+summary(K27ac_bed_df$CKO_K27me3)
+#Min.  1st Qu.   Median     Mean  3rd Qu.     Max. 
+#0.02584  0.97272  2.03075  2.91181  3.97875 22.33971 
+
+summary(K27ac_bed_df$CTR_K27ac)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#  0.8309  2.6940  3.8924  3.7566  4.8129  9.6930 
+
+summary(K27ac_bed_df$CKO_K27ac)
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#   0.349   1.838   3.342   3.329   4.725   8.455 
+
+K27ac_bed_df$log2H2Aub <- log2(K27ac_bed_df$CKO_H2Aub + 0.01) - 
+                          log2(K27ac_bed_df$CTR_H2Aub + 0.01)
+K27ac_bed_df$log2K27me3 <- log2(K27ac_bed_df$CKO_K27me3 + 0.01) - 
+                           log2(K27ac_bed_df$CTR_K27me3 + 0.01)
+K27ac_bed_df$log2K27ac <- log2(K27ac_bed_df$CKO_K27ac + 0.01) -
+                          log2(K27ac_bed_df$CTR_K27ac + 0.01)
+K27ac_bed_df$logCTRK27me3 <- log2(K27ac_bed_df$CTR_K27me3 + 0.01)
+K27ac_bed_df$logCKOK27me3 <- log2(K27ac_bed_df$CKO_K27me3 + 0.01)
+K27ac_bed_df$logCTRK27ac <- log2(K27ac_bed_df$CTR_K27ac + 0.01)
+K27ac_bed_df$logCKOK27ac <- log2(K27ac_bed_df$CKO_K27ac + 0.01)
+K27ac_bed_df$logCTRH2Aub <- log2(K27ac_bed_df$CTR_H2Aub + 0.01)
+# 
+# ggplot(K27ac_bed_df, aes(x = logCTRK27ac, y = logCKOK27ac, color = log2K27me3)) + 
+#   geom_point()
+
+library(ggplot2)
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"), ], 
+       aes(x = log2K27me3, y = log2K27ac, color = logCTRK27me3)) + 
+  geom_point() +
+  xlim(-3, 6) + ylim(-3, 1)
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"), ], 
+       aes(x = log2K27me3, y = log2H2Aub, color = logCTRK27me3)) + 
+  geom_point()
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_lost"), ], 
+       aes(x = log2H2Aub, y = log2K27ac, color = logCTRH2Aub)) + 
+  geom_point()
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"), ], 
+       aes(x = log2K27me3, y = log2K27ac, color = logCTRK27me3)) + 
+  geom_point() +
+  xlim(-3, 6) + ylim(-3, 1)
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"), ], 
+       aes(x = log2K27me3, y = log2K27ac, color = CTR_K27me3)) + 
+  geom_point() +
+  xlim(-3, 6) + ylim(-3, 1)
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"), ], 
+       aes(x = log2K27me3, y = log2H2Aub)) + 
+  geom_point()
+
+ggplot(K27ac_bed_df[which(K27ac_bed_df$group == "K27ac_no_change"), ], 
+       aes(x = log2H2Aub, y = log2K27ac)) + 
+  geom_point()
+
+ggplot(K27ac_bed_df,
+       aes(x = log2K27me3, y = log2K27ac, color = group)) +
+  geom_point()
+
+ggplot(K27ac_bed_df,
+       aes(x = log2K27me3, y = log2H2Aub, color = group)) +
+  geom_point()
+
+ggplot(K27ac_bed_df,
+       aes(x = log2H2Aub, y = log2K27ac, color = group)) +
+  geom_point()
+
+#-------------------------------------------
+
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

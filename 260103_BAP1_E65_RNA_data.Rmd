@@ -1,0 +1,661 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Fig. s9e-f, Fig7c
+
+## E65 RNA QC
+#### 1. Lineage marker
+```{r}
+source("./utils.R")
+#Sample info
+sampleName <- c("BAP1_CKO270_E65_epi1", "BAP1_CKO270_E65_epi2",
+                "BAP1_CKO270_E65_exe1", "BAP1_CKO270_E65_exe2",
+                "BAP1_CKO270_E65_ve1", "BAP1_CKO270_E65_ve2",
+                "BAP1_CTR195_E65_epi1", "BAP1_CTR195_E65_exe1",
+                "BAP1_CTR195_E65_ve1", "BAP1_CTR263_E65_epi1", 
+                "BAP1_CTR263_E65_ve1", "BAP1_CTR296_E65_exe4")
+
+simpleName <- sampleName
+
+#input data
+input_path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/"
+
+rpkm <- inputStringTieRPKMfiles(sampleName, paste0(simpleName, ".rpkm"),
+                                RPKMDataPath = paste0(input_path, "BAP1_E65_RNA/"))
+
+write.csv(rpkm, "./R_output/260103_BAP1_E65_RNA_fpkm.csv", quote = F, row.names = F)
+
+#organize for GEO submission (processed file)
+
+#remove BAP1_CTR296 samples (contaminated)
+rpkm_filtered <- rpkm[, c(1:13)]
+#change sample name
+colnames(rpkm_filtered) <- c("gene_id", "gene_name", 
+                             "matKO_epi_rep1.rpkm", "matKO_epi_rep2.rpkm",
+                             "matKO_exe_rep1.rpkm", "matKO_exe_rep2.rpkm",
+                             "matKO_ve_rep1.rpkm", "matKO_ve_rep2.rpkm",
+                             "ctr_epi_rep1.rpkm", "ctr_exe_rep1.rpkm",
+                             "ctr_ve_rep1.rpkm", "ctr_epi_rep2.rpkm",
+                             "ctr_ve_rep2.rpkm")
+write.csv(rpkm_filtered, "./R_output/260108_BAP1_E65_RNA_fpkm_filtered.csv", 
+          quote = F, row.names = F)
+```
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+
+marker <- c("Pou5f1", "Nanog", "Gata6", "Gata4", "Gata3", "Elf5")
+marker.fpkm <- rpkm[which(rpkm$name %in% marker),]
+
+marker_long <- marker.fpkm %>%
+  pivot_longer(
+    cols = -c(id, name),
+    names_to = "sample",
+    values_to = "rpkm"
+  )
+
+marker_long$name   <- factor(marker_long$name, 
+                             levels = c("Pou5f1", "Gata4",
+                                        "Elf5", "Nanog",
+                                        "Gata6", "Gata3"))
+marker_long$sample <- factor(marker_long$sample, 
+                             levels = c("BAP1_CTR195_E65_epi1.rpkm", "BAP1_CTR263_E65_epi1.rpkm",
+                                        "BAP1_CKO270_E65_epi1.rpkm", "BAP1_CKO270_E65_epi2.rpkm",
+                                        "BAP1_CTR195_E65_ve1.rpkm",  "BAP1_CTR263_E65_ve1.rpkm",
+                                        "BAP1_CKO270_E65_ve1.rpkm", "BAP1_CKO270_E65_ve2.rpkm",
+                                        "BAP1_CTR195_E65_exe1.rpkm", "BAP1_CTR296_E65_exe4.rpkm",
+                                        "BAP1_CKO270_E65_exe1.rpkm", "BAP1_CKO270_E65_exe2.rpkm"),
+                             labels = c("CTR_EPI1", "CTR_EPI2",
+                                        "CKO_EPI1", "CKO_EPI2",
+                                        "CTR_VE1", "CTR_VE2",
+                                        "CKO_VE1", "CKO_VE2",
+                                        "CTR_EXE1", "CTR_EXE2", 
+                                        "CKO_EXE1", "CKO_EXE2"))
+
+
+ggplot(marker_long, aes(x = sample, y = rpkm, fill = name)) +
+  geom_col() +
+  facet_wrap(~ name, scales = "free_y") +
+  theme_bw(14) +
+  scale_fill_manual(values = 
+                    c("Pou5f1" = "dodgerblue3",
+                      "Nanog" = "dodgerblue3",
+                      "Gata6" = "chocolate1",
+                      "Gata4" = "chocolate1",
+                      "Elf5" = "darkgreen",
+                      "Gata3" = "darkgreen")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank(),
+    legend.position = "none"
+  ) +
+  ylab("FPKM") +
+  xlab(NULL)
+```
+
+```{r}
+#remove CTR_EXE2 since it is severely contaminated with EPI 
+marker_long <- marker.fpkm %>%
+  pivot_longer(
+    cols = -c(id, name),
+    names_to = "sample",
+    values_to = "rpkm"
+  )
+
+marker_long <- marker_long %>%
+  filter(sample != "BAP1_CTR296_E65_exe4.rpkm") %>%
+  droplevels()
+
+marker_long$name   <- factor(marker_long$name, 
+                             levels = c("Pou5f1", "Gata4",
+                                        "Elf5", "Nanog",
+                                        "Gata6", "Gata3"))
+marker_long$sample <- factor(marker_long$sample, 
+                             levels = c("BAP1_CTR195_E65_epi1.rpkm", "BAP1_CTR263_E65_epi1.rpkm",
+                                        "BAP1_CKO270_E65_epi1.rpkm", "BAP1_CKO270_E65_epi2.rpkm",
+                                        "BAP1_CTR195_E65_ve1.rpkm",  "BAP1_CTR263_E65_ve1.rpkm",
+                                        "BAP1_CKO270_E65_ve1.rpkm", "BAP1_CKO270_E65_ve2.rpkm",
+                                        "BAP1_CTR195_E65_exe1.rpkm", "BAP1_CTR296_E65_exe4.rpkm",
+                                        "BAP1_CKO270_E65_exe1.rpkm", "BAP1_CKO270_E65_exe2.rpkm"),
+                             labels = c("CTR_EPI1", "CTR_EPI2",
+                                        "CKO_EPI1", "CKO_EPI2",
+                                        "CTR_VE1", "CTR_VE2",
+                                        "CKO_VE1", "CKO_VE2",
+                                        "CTR_EXE1", "CTR_EXE2", 
+                                        "CKO_EXE1", "CKO_EXE2"))
+
+
+fig1 <- ggplot(marker_long, aes(x = sample, y = rpkm, fill = name)) +
+  geom_col() +
+  facet_wrap(~ name, scales = "free_y") +
+  theme_bw(14) +
+  scale_fill_manual(values = 
+                    c("Pou5f1" = "dodgerblue3",
+                      "Nanog" = "dodgerblue3",
+                      "Gata6" = "chocolate1",
+                      "Gata4" = "chocolate1",
+                      "Elf5" = "darkgreen",
+                      "Gata3" = "darkgreen")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank(),
+    legend.position = "none"
+  ) +
+  ylab("FPKM") +
+  xlab(NULL)
+fig1
+
+pdf("./figures/260103_E65_lineage_marker.pdf", 
+    width = 8, heigh = 4)
+fig1
+dev.off()
+```
+
+### 2. correlation heatmap
+
+```{r}
+suppressMessages(library(reshape2))
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+#remove BAP1_CTR296_E65_exe4.rpkm due to high contamination
+
+logrpkm <- log2(rpkm[, c(3:4,9,12,7,8,11,13, 5,6,10)] + 0.1)
+logrpkmCor <- round(cor(logrpkm), 3)
+logrpkmMelted <- melt(logrpkmCor)
+
+theme <- theme(
+  panel.grid.major.y = element_line(),
+  panel.grid.major.x = element_line(),
+  panel.grid.minor.x = element_line(),
+  panel.grid.minor.y = element_blank(),
+  panel.background = element_rect(fill="white"),
+  axis.text.x = element_text(colour = "black", size = rel(1), angle = 90),  #size of x axis
+  axis.text.y = element_text(colour = "black", size = rel(1)),  #size of y axis
+  axis.title.y = element_blank(),
+  axis.title.x = element_blank(),
+  panel.border = element_rect(colour="black", fill=NA, size=0.5)
+)
+
+fig_cor <- ggplot(data = logrpkmMelted, aes(Var1, Var2, fill = value)) +
+  geom_tile (color = "white") + 
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0.9, 
+                       limit = c(0.8, 1), space = 'Lab', name = "Pearson\nCorrelation") + 
+  theme
+fig_cor
+
+pdf(file = paste0("./figures/260105_E65_RNA_correation_heatmap.pdf"), 
+    width = 6, height = 4.5)
+fig_cor
+dev.off()
+```
+
+### 3. Allelic expression
+```{r}
+#list of imprinted genes in E6.5 EPI, EXE, and VE (based on Inoue et al., 2017)
+EPI_pat_imprint <- c("Cdh15", "Snhg14", "Fkbp6", "Impact", "Inpp5f", "Kcnq1ot1",
+                     "Magel2", "Mest", "Nnat", "Peg3", "Sgce", "Slc38a4",
+                     "Snrpn", "Zdbf2", "Zrsr1")
+
+EPI_mat_imprint <- c("Gnas", "Grb10", "H13", "H19", "Meg3", "Mirg", "Phlda2", "Rian")
+
+VE_pat_imprint <- c("Airn", "Snhg14", "Dlk1", "Fkbp6", "Gab1", "Igf2", "Impact", 
+                     "Kcnq1ot1", "Mest", "Peg10", "Peg3", "Jade1", "Sfmbt2", "Sgce", 
+                     "Snrpn", "Zrsr1", "Platr20")
+
+VE_mat_imprint <- c("Cdkn1c", "Grb10", "H13", "H19", "Igf2r", "Mas1", "Meg3", 
+                    "Mirg", "Phlda2", "Rian", "Tssc4")
+
+EXE_pat_imprint <- c("Airn", "Cdh15", "Snhg14", "Fkbp6", "Gab1", "Igf2", "Kcnq1ot1",
+                     "Mest", "Peg10", "Peg3", "Jade1", "Sfmbt2", "Sgce", "Slc38a4",
+                     "Smoc1", "Snrpn", "Platr20", "Zrsr1")
+
+EXE_mat_imprint <- c("Ascl2", "Cdkn1c", "Grb10", "H19", "Igf2r", 
+                     "Meg3", "Mirg", "Phlda2", "Rian", "Slc22a18", "Tssc4")
+```
+
+```{r}
+source("./utils.R")
+
+#Sample info
+sampleName <- c("BAP1_CKO270_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CKO270_E65_epi2Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_epi2Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CKO270_E65_exe1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_exe1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CKO270_E65_exe2Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_exe2Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CKO270_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CKO270_E65_ve2Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CKO270_E65_ve2Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CTR195_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CTR195_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CTR263_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CTR263_E65_epi1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CTR195_E65_exe1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CTR195_E65_exe1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CTR195_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CTR195_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome2",
+                "BAP1_CTR263_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome1",
+                "BAP1_CTR263_E65_ve1Aligned.out.sorted_uniq.sortedByName.genome2")
+
+simpleName <- c("CKO_EPI1_mat", "CKO_EPI1_pat", "CKO_EPI2_mat", "CKO_EPI2_pat",
+                "CKO_EXE1_mat", "CKO_EXE1_pat", "CKO_EXE2_mat", "CKO_EXE2_pat",
+                "CKO_VE1_mat", "CKO_VE1_pat", "CKO_VE2_mat", "CKO_VE2_pat",
+                "CTR_EPI1_mat", "CTR_EPI1_pat", "CTR_EPI2_mat", "CTR_EPI2_pat",
+                "CTR_EXE1_mat", "CTR_EXE1_pat",
+                "CTR_VE1_mat", "CTR_VE1_pat", "CTR_VE2_mat", "CTR_VE2_pat")
+    
+
+#input data
+input_path <- "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/BAP1_E65_RNA/"
+allelic_counts <- inputTEcountfiles(sampleName, paste0(simpleName, ".count"), 
+                            countDataPath = paste0(input_path))
+nrow(allelic_counts) #56547
+
+#remove repeats 
+allelic_counts <- allelic_counts[-grep(":", allelic_counts$id),]
+nrow(allelic_counts) #55401
+
+#replace id with gene name
+allelic_counts <- merge(allelic_counts, rpkm[,c(1:2)], by = "id")
+nrow(allelic_counts) #55401
+
+#calculate log2(pat/mat) matrix, totwl read counts <20 as NA
+num_cols <- 2:(ncol(allelic_counts) - 1)
+
+den <- as.matrix(allelic_counts[, num_cols[seq(1, length(num_cols), by = 2)]])
+num <- as.matrix(allelic_counts[, num_cols[seq(2, length(num_cols), by = 2)]])
+
+pair_sum <- num + den
+
+allelic_matrix <- log2(
+  (num + 0.001) / (den + 0.001)
+)
+
+allelic_matrix[pair_sum < 30] <- NA
+
+rownames(allelic_matrix) <- allelic_counts$name
+
+#classify genes by <-3, -3 to -2, -2 to -1, -1 to 1, 1 to 2, 2 to 3, >3
+allelic_matrix_class <- matrix(
+  cut(
+    allelic_matrix,
+    breaks = c(-Inf, -3, -2, -1, 1, 2, 3, Inf),
+    labels = c(-3, -2, -1, 0, 1, 2, 3),
+    right = TRUE
+  ),
+  nrow = nrow(allelic_matrix),
+  ncol = ncol(allelic_matrix),
+  dimnames = dimnames(allelic_matrix)
+)
+
+# convert to numeric (optional)
+allelic_matrix_class <- apply(allelic_matrix_class, 2, as.numeric)
+
+# rownames as gene names
+rownames(allelic_matrix_class) <- allelic_counts$name
+```
+
+```{r}
+library(pheatmap)
+breaks <- c(-3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5)
+colors <- c(
+  "red4", #-3
+  "brown1", #-2
+  "indianred1", #-1
+  "grey", #0
+  "cornflowerblue", #1
+  "royalblue", #2
+  "navy" #3
+)
+
+#plot heatmap - epi paternal
+allelic_matrix_class_epi_pat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% EPI_pat_imprint, ,drop = F]
+allelic_matrix_class_epi_pat <- allelic_matrix_class_epi_pat[, grepl("EPI", colnames(allelic_matrix_class_epi_pat)),
+                                                             drop = F]
+allelic_matrix_class_epi_pat <- allelic_matrix_class_epi_pat[order(rownames(allelic_matrix_class_epi_pat)), , drop = F]
+
+pheatmap(
+  allelic_matrix_class_epi_pat[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+
+#remove Cdh15, Magel2, Snhg14, Snrpn due to low read counts
+fig2 <- pheatmap(
+  allelic_matrix_class_epi_pat[-c(1, 6, 12:13), c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+fig2
+
+pdf("./figures/260105_Epi_paternal_gene.pdf", width = 4, height = 8)
+fig2
+dev.off()
+```
+
+```{r}
+#plot heatmap - epi maternal
+allelic_matrix_class_epi_mat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% EPI_mat_imprint, ,drop = F]
+allelic_matrix_class_epi_mat <- allelic_matrix_class_epi_mat[, grepl("EPI", colnames(allelic_matrix_class_epi_mat)),
+                                                             drop = F]
+allelic_matrix_class_epi_mat <- allelic_matrix_class_epi_mat[order(rownames(allelic_matrix_class_epi_mat)), , drop = F]
+
+fig3<- pheatmap(
+  allelic_matrix_class_epi_mat[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+
+fig3
+
+pdf("./figures/260105_Epi_maternal_gene.pdf", width = 4, height = 8)
+fig3
+dev.off()
+```
+
+```{r}
+#plot heatmap - ve paternal
+allelic_matrix_class_ve_pat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% VE_pat_imprint, ,drop = F]
+allelic_matrix_class_ve_pat <- allelic_matrix_class_ve_pat[, grepl("VE", colnames(allelic_matrix_class_ve_pat)),
+                                                             drop = F]
+allelic_matrix_class_ve_pat <- allelic_matrix_class_ve_pat[order(rownames(allelic_matrix_class_ve_pat)), , drop = F]
+
+pheatmap(
+  allelic_matrix_class_ve_pat[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+
+#remove Jade, Snhg14, Snrpn, 
+fig4 <- pheatmap(
+  allelic_matrix_class_ve_pat[-c(7, 15, 16), c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+fig4
+
+pdf("./figures/260105_Ve_paternal_gene.pdf", width = 4, height = 8)
+fig4
+dev.off()
+```
+
+```{r}
+#plot heatmap - ve maternal
+allelic_matrix_class_ve_mat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% VE_mat_imprint, ,drop = F]
+allelic_matrix_class_ve_mat <- allelic_matrix_class_ve_mat[, grepl("VE", colnames(allelic_matrix_class_ve_mat)),
+                                                             drop = F]
+allelic_matrix_class_ve_mat <- allelic_matrix_class_ve_mat[order(rownames(allelic_matrix_class_ve_mat)), , drop = F]
+
+fig5 <- pheatmap(
+  allelic_matrix_class_ve_mat[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+fig5
+pdf("./figures/260105_Ve_maternal_gene.pdf", width = 4, height = 8)
+fig5
+dev.off()
+```
+```{r}
+#plot heatmap - exe paternal
+allelic_matrix_class_exe_pat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% EXE_pat_imprint, ,drop = F]
+allelic_matrix_class_exe_pat <- allelic_matrix_class_exe_pat[, grepl("EXE", colnames(allelic_matrix_class_exe_pat)),
+                                                             drop = F]
+allelic_matrix_class_exe_pat <- allelic_matrix_class_exe_pat[order(rownames(allelic_matrix_class_exe_pat)), , drop = F]
+
+pheatmap(
+  allelic_matrix_class_exe_pat[, c(3, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+
+#to add another column of WT EXE control 1 based on Chen et al., 2019
+#to remove Snhg14 and Snrpn
+
+WT1 <- c(3, 3, 2, 1, 3, 3, 3, 2, 3, 3, 3, 3, 1, 3)
+allelic_matrix_class_exe_pat <- cbind(WT1, 
+                                      allelic_matrix_class_exe_pat[-c(1, 2, 16, 17), c(3, 1, 2)])
+
+fig6 <- pheatmap(
+  allelic_matrix_class_exe_pat[, c(2, 1, 3, 4)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+fig6
+
+pdf("./figures/260105_Exe_paternal_gene.pdf", width = 4, height = 8)
+fig6
+dev.off()
+```
+
+```{r}
+#plot heatmap - exe maternal
+allelic_matrix_class_exe_mat <- allelic_matrix_class[rownames(allelic_matrix_class) %in% EXE_mat_imprint, ,drop = F]
+allelic_matrix_class_exe_mat <- allelic_matrix_class_exe_mat[, grepl("EXE", colnames(allelic_matrix_class_exe_mat)),
+                                                             drop = F]
+allelic_matrix_class_exe_mat <- allelic_matrix_class_exe_mat[order(rownames(allelic_matrix_class_exe_mat)), , drop = F]
+
+pheatmap(
+  allelic_matrix_class_exe_mat[, c(3, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+
+#to add another column of WT EXE control 1 based on Chen et al., 2019
+
+WT1 <- c(-3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3)
+allelic_matrix_class_exe_mat <- cbind(WT1, 
+                                      allelic_matrix_class_exe_mat[, c(3, 1, 2)])
+
+fig7<- pheatmap(
+  allelic_matrix_class_exe_mat[, c(2, 1, 3, 4)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+fig7
+
+pdf("./figures/260105_Exe_maternal_gene.pdf", width = 4, height = 8)
+fig7
+dev.off()
+```
+
+## K27ac-lost gene in E65
+
+### 1. the gene list
+```{r}
+load("./R_output/250625_K27ac_lost_annotation.RDS")
+table(lost_annotation$simpleAnnotation)
+
+length(lost_annotation) #9043
+
+lost_annotation_filter <- lost_annotation[seqnames(lost_annotation) %in%
+                                            paste0("chr", 1:19)]
+length(lost_annotation_filter) #7751
+
+rpkm_lost <- rpkm[which(
+  rpkm$id %in% lost_annotation_filter[which(
+    lost_annotation_filter$simpleAnnotation == "Promoter" |
+    lost_annotation_filter$simpleAnnotation == "Intragenic"
+  ), ]$geneId
+),]
+
+nrow(rpkm_lost) #3086
+# 
+# boxplot(log2(rpkm_lost[, c(3:4, 9,12)]+0.01))
+# pheatmap(log2(rpkm_lost[, c(3:4, 9,12)]+0.01))
+# 
+# boxplot(log2(rpkm_lost[, c(7:8, 11,13)]+0.01))
+# pheatmap(log2(rpkm_lost[, c(7:8, 11,13)]+0.01))
+# 
+# boxplot(log2(rpkm_lost[, c(5:6, 10)]+0.01))
+# pheatmap(log2(rpkm_lost[, c(5:6, 10)]+0.01))
+
+
+#plot allelic heatmap - epi lost genes
+lost_epi <- allelic_matrix_class[rownames(allelic_matrix_class) %in% rpkm_lost$name, ,drop = F]
+lost_epi <- lost_epi[, grepl("EPI", colnames(lost_epi)),
+                                                             drop = F]
+nrow(lost_epi)
+lost_epi <- lost_epi[order(rownames(lost_epi)), , drop = F]
+lost_epi <- lost_epi[rowSums(is.na(lost_epi)) == 0, ]
+
+nrow(lost_epi)
+
+pdf("./figures/260106_K27ac_lost_genes_allelic_in_epi.pdf",
+    height = 40, width = 4)
+pheatmap(
+  lost_epi[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+dev.off()
+
+#plot allelic heatmap - exe lost genes
+lost_exe <- allelic_matrix_class[rownames(allelic_matrix_class) %in% rpkm_lost$name, ,drop = F]
+lost_exe <- lost_exe[, grepl("EXE", colnames(lost_exe)), drop = F]
+nrow(lost_exe)
+lost_exe <- lost_exe[order(rownames(lost_exe)), , drop = F]
+lost_exe <- lost_exe[rowSums(is.na(lost_exe)) == 0, ]
+
+nrow(lost_exe) #164
+
+pdf("./figures/260106_K27ac_lost_genes_allelic_in_exe.pdf",
+    height = 40, width = 4)
+pheatmap(
+  lost_exe[, c(3, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+dev.off()
+
+#plot allelic heatmap - ve lost genes
+lost_ve <- allelic_matrix_class[rownames(allelic_matrix_class) %in% rpkm_lost$name, ,drop = F]
+lost_ve <- lost_ve[, grepl("VE", colnames(lost_ve)), drop = F]
+nrow(lost_ve)
+lost_ve <- lost_ve[order(rownames(lost_ve)), , drop = F]
+lost_ve <- lost_ve[rowSums(is.na(lost_ve)) == 0, ]
+
+nrow(lost_ve) #177
+
+pdf("./figures/260106_K27ac_lost_genes_allelic_in_ve.pdf",
+    height = 40, width = 4)
+pheatmap(
+  lost_ve[, c(3, 4, 1, 2)],
+  color = colors,
+  breaks = breaks,
+  cluster_rows = F,
+  cluster_cols = F,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  border_color = "grey",
+  legend = T,
+  cellwidth = 15, cellheight = 12,
+  fontsize= 10,  na_col = "white"
+)
+dev.off()
+```

@@ -1,0 +1,329 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Fig. S9a-b
+Fig. 7b
+
+### 1. QC
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(dplyr))
+source("./utils.R")
+
+#blacklist
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+```
+
+```{r}
+#since one of the control ExE (CTR296) K27me3 CUTRUN is of high background, compare 
+#another control with public E6.5 ExE K27me3 data. 
+gr <- import("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/E65_WT_EXE_K27me3/GSM3732324_Dnmt3ab_WT_E65_ExE_B6DBAxPWK_H3K27me3_embry6_7_pooled.bw")
+
+suppressMessages(library("liftOver"))
+ch = import.chain("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/E65_WT_EXE_K27me3/mm9ToMm10.over.chain")
+seqlevelsStyle(gr) <- "UCSC"
+gr_mm10 <- liftOver(gr, ch)
+gr_mm10 <- unlist(gr_mm10)
+genome(gr_mm10) <- "mm10"
+
+bed_mm10 <- data.frame(
+  seqnames = seqnames(gr_mm10),
+  start = start(gr_mm10),  # 0-based for bedGraph
+  end = end(gr_mm10),
+  score = mcols(gr_mm10)$score
+)
+
+write.table(
+  bed_mm10,
+  file = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/E65_WT_EXE_K27me3/WT_E65_ExE_mm10.bedGraph", 
+  quote = F, sep = "\t", col.names = F, row.names = F
+)
+
+#sort -k1,1 -k2,2n WT_E65_ExE_mm10.bedGraph > WT_E65_ExE_mm10_sorted.bedGraph
+#bedtools merge -c 4 -o max -i WT_E65_ExE_mm10_sorted.bedGraph > WT_E65_ExE_mm10_sorted_merged.bedGraph
+#bedGraphToBigWig  WT_E65_ExE_mm10_sorted_merged.bedGraph /data/ZYChenlab/Zhiyuan/genomes_annotations/mm10/genomes/chrNameLength.txt WT_E65_ExE_mm10.bw
+```
+
+```{r}
+path1 <- c("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/260102_BAP1_morula_K27me3_CR/bigwigs/")
+path2 <- c("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/260101_BAP1_E65_K27me3_CR/bigwigs/")
+path3 <- c("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/R_input/E65_WT_EXE_K27me3/")
+
+bw <- list(
+  CTR_mor_1 = paste0(path1, "CTR_Morula_H3K27me3_rep1_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_mor_2 = paste0(path1, "CTR_Morula_H3K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_mor_1 = paste0(path1, "CKO_Morula_H3K27me3_rep1_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_mor_2 = paste0(path1, "CKO_Morula_H3K27me3_rep2_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_epi1 = paste0(path2, "CTR195_E65_EPI1_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_epi2 = paste0(path2, "CTR195_E65_EPI2_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_exe1 = paste0(path2, "CTR195_E65_EXE1_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_exe2 = paste0(path3, "WT_E65_ExE_mm10.bw"),
+  CTR_ve1 = paste0(path2, "CTR195_E65_VE1_mm10.sorted.multi.Q30.dedup.bw"),
+  CTR_ve2 = paste0(path2, "CTR195_E65_VE2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_epi1 = paste0(path2, "CKO192_E65_EPI1_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_epi2 = paste0(path2, "CKO192_E65_EPI2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_exe1 = paste0(path2, "CKO192_E65_EXE1_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_exe2 = paste0(path2, "CKO192_E65_EXE2_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_ve1 = paste0(path2, "CKO192_E65_VE1_mm10.sorted.multi.Q30.dedup.bw"),
+  CKO_ve2 = paste0(path2, "CKO192_E65_VE2_mm10.sorted.multi.Q30.dedup.bw")
+)
+```
+
+
+```{r}
+#generate 5kb bins, excluding X chromosomes
+GW_5kb_windows <- GRangesList()
+seqlevels(GW_5kb_windows) = paste0("chr",c(1:19))
+seqlengths(GW_5kb_windows) = seqlengths(BSgenome.Mmusculus.UCSC.mm10)[seqlevels(GW_5kb_windows)]
+
+for(chrom in paste0("chr",c(1:19))){
+  region <- GRanges(chrom, IRanges(1, seqlengths(BSgenome.Mmusculus.UCSC.mm10)[chrom]))
+  gr = slidingWindows(region,width = 5e3,step = 5e3)[[1]] 
+  #width: width of each tile, 
+  #step: distance between the start positions of the sliding windows.
+  GW_5kb_windows[[chrom]] = gr
+}
+
+GW_5kb_windows = GW_5kb_windows %>% unlist()
+
+length(GW_5kb_windows) #492558
+
+#remove windows overlappign blacklist
+GW_5kb_windows <- GW_5kb_windows[ !GW_5kb_windows %over% mm10_blacklist]
+length(GW_5kb_windows) #462046
+```
+
+```{r}
+#count signals
+histone_5kb <-  matrix(0, ncol= length(bw), nrow=length(GW_5kb_windows))
+colnames(histone_5kb) = names(bw)
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  histone_5kb[,sample] = calcPeaksSignal(GW_5kb_windows, bw_file)$meanScore
+}
+
+head(histone_5kb)
+histone_5kb <- as.data.frame(histone_5kb)
+histone_5kb$chr <- as.character(seqnames(GW_5kb_windows))
+histone_5kb$start <- start(GW_5kb_windows)
+histone_5kb$end <- end(GW_5kb_windows)
+saveRDS(histone_5kb, "./R_output/260106_K27me3_5kb_bin_signals_mor_E65.rds")
+```
+
+```{r}
+histone4cor <- as.matrix(histone_5kb[, c(1:16)])
+
+loghistone4cor <- log2(histone4cor+0.01)
+  
+pdf("./figures/260106_K27me3_5kb_bin_mor_E65_smoothScatter.pdf", width = 5, height = 5)
+smoothScatter(loghistone4cor[,1], 
+              loghistone4cor[,2], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR morula", 
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(loghistone4cor[,3], 
+              loghistone4cor[,4], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO morula",
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(loghistone4cor[,5], 
+              loghistone4cor[,6], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR EPI",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,7], 
+              loghistone4cor[,8], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR EXE",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,9], 
+              loghistone4cor[,10], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CTR VE ",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+smoothScatter(loghistone4cor[,11], 
+              loghistone4cor[,12], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO EPI ",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+
+smoothScatter(loghistone4cor[,13], 
+              loghistone4cor[,14], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO EXE",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+
+smoothScatter(loghistone4cor[,15], 
+              loghistone4cor[,16], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H3K27me3 CKO VE",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+dev.off()
+
+cor(loghistone4cor[,1], loghistone4cor[,2])
+#0.70
+cor(loghistone4cor[,3], loghistone4cor[,4])
+#0.68
+cor(loghistone4cor[,5], loghistone4cor[,6])
+#0.75
+cor(loghistone4cor[,7], loghistone4cor[,8])
+#0.71
+cor(loghistone4cor[,9], loghistone4cor[,10])
+#0.79
+cor(loghistone4cor[,11], loghistone4cor[,12])
+#0.76
+cor(loghistone4cor[,13], loghistone4cor[,14])
+#0.82
+cor(loghistone4cor[,15], loghistone4cor[,16])
+#0.88
+```
+
+```{r}
+histone_5kb <- readRDS("./R_output/260106_K27me3_5kb_bin_signals_mor_E65.rds")
+histone4cor <- as.matrix(histone_5kb[, c(1:16)])
+loghistone4cor <- log2(histone4cor+0.01)
+
+# distance between samples (columns)
+d <- dist(t(loghistone4cor), method = "euclidean")
+
+# hierarchical clustering
+hc <- hclust(d, method = "complete")
+
+# plot tree
+plot(hc, main = "Hierarchical clustering of samples", )
+
+pdf("./figures/260106_hierarchical_clustring_of_morula_E65_K27me3.pdf", 
+    height= 5, width = 5)
+plot(hc, main = "Hierarchical clustering of K27me3")
+dev.off()
+```
+
+### 2. metaplot analyses
+
+To determine enrichment of K27me3 over those K27me3-gain regions in BAP1 CKO oocytes
+at different developmental stages.
+```{r}
+library(ggplot2)
+library(cowplot)
+
+mat <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/260105_K27me3_gain_in_mor_E65/260105.K27me3.mor.E65.nochrX.mean.matrix", header = T)
+
+colnames(mat) <- "mean"
+
+mat$group <- c(rep("ctr_mor_mat", 1000), rep("ctr_mor_pat", 1000),
+               rep("cko_mor_mat", 1000), rep("cko_mor_pat", 1000),
+               rep("ctr_epi_mat", 1000), rep("ctr_epi_pat", 1000),
+               rep("cko_epi_mat", 1000), rep("cko_epi_pat", 1000),
+               rep("ctr_exe_mat", 1000), rep("ctr_exe_pat", 1000),
+               rep("cko_exe_mat", 1000), rep("cko_exe_pat", 1000),
+               rep("ctr_ve_mat",  1000), rep("ctr_ve_pat",  1000),
+               rep("cko_ve_mat",  1000), rep("cko_ve_pat",  1000))
+mat$bp <- rep(seq(1:1000), 16)
+
+pdf("./figures/260106_mor_E65_at_K27_gain_metaplot.pdf", width = 6, height = 4)
+morula_mat <- mat[c(1:1000, 2001:3000),]
+morula_pat <- mat[c(1001:2000, 3001:4000),]
+ggplot(morula_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("Morula (mat)")
+ggplot(morula_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("Morula (pat)")
+
+
+epi_mat <- mat[c(4001:5000, 6001:7000),]
+epi_pat <- mat[c(5001:6000, 7001:8000),]
+ggplot(epi_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("epi_mat")
+ggplot(epi_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("epi_pat")
+
+exe_mat <- mat[c(8001:9000, 10001:11000),]
+exe_pat <- mat[c(9001:10000, 11001:12000),]
+ggplot(exe_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("exe_mat")
+ggplot(exe_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("exe_pat")
+
+ve_mat <- mat[c(12001:13000, 14001:15000),]
+ve_pat <- mat[c(13001:14000, 15001:16000),]
+ggplot(ve_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("ve_mat")
+ggplot(ve_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("ve_pat")
+dev.off()
+```
+
+```{r}
+mat2 <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250609_K27me3_gain_in_GV_L2C/250609.K27me3.GV.L2C.mean.matrix", header = T)
+
+colnames(mat2) <- "mean"
+
+mat2$group <- c(rep("ctr_gv_K27me3", 1000), rep("cko_gv_K27me3", 1000),
+                rep("ctr_2c_mat",1000), rep("ctr_2c_pat", 1000),
+                rep("cko_2c_mat", 1000), rep("cko_2c_pat", 1000))
+mat2$bp <- rep(seq(1:1000), 6) 
+
+l2c_mat <- mat2[c(2001:3000, 4001:5000), ]
+l2c_pat <- mat2[c(3001:4000, 5001:6000), ]
+
+pdf("./figures/260106_L2C_at_K27_gain_metaplot.pdf", width = 6, height = 4)
+ggplot(l2c_mat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("l2c_mat")
+ggplot(l2c_pat, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,10)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("l2c_pat")
+dev.off()
+```

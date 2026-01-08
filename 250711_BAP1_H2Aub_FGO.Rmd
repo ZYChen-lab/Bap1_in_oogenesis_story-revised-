@@ -1,0 +1,392 @@
+---
+title: "250711_BAP1_H2Aub_FGO"
+output: html_notebook
+---
+
+Fig. 1J, 1K, 1M, 
+Fig. S2F, 
+
+### 1 QC
+```{r}
+#load libraries
+suppressMessages(library(GenomicRanges))
+suppressMessages(library(BSgenome.Mmusculus.UCSC.mm10))
+suppressMessages(library(tidyr))
+suppressMessages(library(rtracklayer))
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+suppressMessages(library(ggsci))
+source("./utils.R")
+
+#blacklist
+mm10_blacklist <- import.bed("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/mm10-blacklist.v2.bed")
+length(mm10_blacklist) #3435
+
+#bigwig files
+bw <-list(
+  CTR_H2Aub1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241203_BAP1_GV_K27me3_H2Aub_rep1/bigwigs/BAP1_GV_CTR_H2Aub_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CTR_H2Aub2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250307_BAP1_GV_K27me3_H2Aub_rep2_K27ac_rep1_2/bigwigs/BAP1_GV_CTR_H2Aub_rep2_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_H2Aub1 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241203_BAP1_GV_K27me3_H2Aub_rep1/bigwigs/BAP1_GV_CKO_H2Aub_rep1_mm10.sorted.multi.Q30.dedup.bw",
+  CKO_H2Aub2 = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250307_BAP1_GV_K27me3_H2Aub_rep2_K27ac_rep1_2/bigwigs/BAP1_GV_CKO_H2Aub_rep2_mm10.sorted.multi.Q30.dedup.bw",
+  CTR_H2Aub = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_H2Aub_merged.bw",
+  public_H2Aub = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/241104_remap_histones_GV/bigwigs/H2Aub_GV_merged.bw"
+)
+
+#generate 5kb window
+GW_5kb_windows <- GRangesList()
+seqlevels(GW_5kb_windows) = paste0("chr",c(1:19,"X"))
+seqlengths(GW_5kb_windows) = seqlengths(BSgenome.Mmusculus.UCSC.mm10)[seqlevels(GW_5kb_windows)]
+
+for(chrom in paste0("chr",c(1:19,"X","Y"))){
+  region <- GRanges(chrom, IRanges(1, seqlengths(BSgenome.Mmusculus.UCSC.mm10)[chrom]))
+  gr = slidingWindows(region,width = 5e3,step = 5e3)[[1]] 
+  #width: width of each tile, 
+  #step: distance between the start positions of the sliding windows.
+  GW_5kb_windows[[chrom]] = gr
+}
+
+GW_5kb_windows = GW_5kb_windows %>% unlist()
+
+length(GW_5kb_windows) #545114
+
+#remove windows overlappign blacklist
+GW_5kb_windows <- GW_5kb_windows[ !GW_5kb_windows %over% mm10_blacklist]
+length(GW_5kb_windows) #493982
+
+#count signals
+H2Aub_5kb_enrichment <-  matrix(0, ncol= length(bw), nrow=length(GW_5kb_windows))
+colnames(H2Aub_5kb_enrichment) = names(bw)
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  H2Aub_5kb_enrichment[,sample] = calcPeaksSignal(GW_5kb_windows, bw_file)$meanScore
+}
+
+head(H2Aub_5kb_enrichment)
+saveRDS(H2Aub_5kb_enrichment, "./R_output/250317_H2Aub_5kb_bin_signals.rds")
+H2Aub_5kb_enrichment <- readRDS("./R_output/250317_H2Aub_5kb_bin_signals.rds")
+head(H2Aub_5kb_enrichment)
+
+#plotting by log2 transformation
+log_H2Aub_5kb_enrichment <- log2(H2Aub_5kb_enrichment + 0.1)
+
+#Fig. S2f in manuscript
+pdf("./figures/250317_H2Aub_5kb_bin_smoothScatter.pdf", width = 5, height = 5)
+smoothScatter(log_H2Aub_5kb_enrichment[,1], 
+              log_H2Aub_5kb_enrichment[,2], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H2AK119ub1 CTR", 
+              xlim = c(-2, 6),
+              ylim = c(-2, 6))
+
+smoothScatter(log_H2Aub_5kb_enrichment[,3], 
+              log_H2Aub_5kb_enrichment[,4], 
+              xlab = "Rep1 (log2FPKM)",
+              ylab = "Rep2 (log2FPKM)",
+              main = "H2AK119ub1 CKO",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+
+smoothScatter(log_H2Aub_5kb_enrichment[,5], 
+              log_H2Aub_5kb_enrichment[,6], 
+              xlab = "CTR merged (log2FPKM)",
+              ylab = "Public data (log2FPKM)",
+              main = "H2AK119ub1",
+              xlim = c(-2, 4),
+              ylim = c(-2, 4))
+dev.off()
+cor(log_H2Aub_5kb_enrichment[,1], log_H2Aub_5kb_enrichment[,2])
+#0.76
+cor(log_H2Aub_5kb_enrichment[,3], log_H2Aub_5kb_enrichment[,4])
+#0.85
+cor(log_H2Aub_5kb_enrichment[,5], log_H2Aub_5kb_enrichment[,6])
+#0.87
+```
+### 2. Domain meta plot
+
+Refers to "/Volumes/ZYChenlab/Zhiyuan/projects//BAP1_project/241230_BAP1_GV_K27me3_H2Aub_K4me3_rep1/deeptool_analyses/250308_H2Aub_K27me3_K27ac_GV_domain/"
+
+
+```{bash}
+#Fig. 1J in manuscript
+CTR_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_H2Aub_merged.bw"
+CKO_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw"
+
+GV_H2Aub_domain="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/241213_HMMDomainCaller/YiZhang-lab-H2Aub_H3K27me3_preimplantation_dynamics-de44f22/HMMDomainCaller/HMMDomains/GV_CTR_H2Aub_merged_5_domains.bed"
+
+computeMatrix scale-regions \
+       -S $CTR_H2Aub $CKO_H2Aub  \
+       -R $GV_H2Aub_domain \
+       -a 2000 -b 2000 \
+       -m 6000 \
+       --outFileName 250308.H2Aub.GV.mat.gz \
+       --sortRegions 'descend' \
+       --samplesLabel  'C_H2Aub' 'K_H2Aub'  \
+       --outFileNameMatrix  250308.H2Aub.GV.matrix \
+       --missingDataAsZero \
+       --sortUsingSamples 1
+       
+plotHeatmap --matrixFile 250308.H2Aub.GV.mat.gz \
+           --outFileName 250308.H2Aub.GV.mat.pdf \
+           --outFileSortedRegions 250308.H2Aub.GV.mat.bed \
+           --dpi 300 \
+           --sortRegions "descend" \
+           --colorMap 'RdYlBu_r' \
+           --boxAroundHeatmaps no \
+           --legendLocation "lower-center" \
+           --sortUsingSamples 1 \
+           --zMax 15 15 
+```
+
+
+```{r}
+#metaplot, not included in manuscript
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+#H2Aub domain-------------------
+H2Aub_domain <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects//BAP1_project/241230_BAP1_GV_K27me3_H2Aub_K4me3_rep1/deeptool_analyses/250308_H2Aub_K27me3_K27ac_GV_domain/250308.H2Aub.GV.mean.matrix", header = T)
+
+colnames(H2Aub_domain) <- "mean"
+
+H2Aub_domain$group <- c(rep("CTR", 1000), rep("CKO", 1000))
+H2Aub_domain$bp <- c(seq(1:1000), seq(1:1000))
+
+
+pdf("./figures/250317_H2Aub_K27me3_domain_GV_metaplot.pdf", width = 6, height = 4)
+ggplot(H2Aub_domain, aes(x = bp, y = mean, color = group)) + 
+  geom_line() + ylim(c(0,15)) + 
+  scale_color_manual(values = c("black", "grey")) +
+  theme_cowplot(16) + ggtitle("H2Aub_domain_in_GV")
+dev.off()
+```
+
+### 3. H2Aub over different regions
+
+H2Aub signals over promoters, gene bodies, intergenic, and enhancers
+
+-FGO enhancers:
+  -From Liu ... Xie 2024 NCB paper 
+
+-gene annotation:
+  -/data/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gff3
+  
+-only protein coding genes are included. 
+  -promoters (2.5kb plus / minus of TSS)
+  -gene bodies
+  -intergenic (excluding gene body, promoter, and enhancers)
+
+```{r}
+bed.file <- list(
+  
+  promoter = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/promomoter.bed",
+  body = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/genebody.bed",
+  intergenic = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/intergenic.bed",
+  enhancer = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/annotation/FGO_mm10.bed"
+)
+
+bw <-list(
+  CTR_H2Aub = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_H2Aub_merged.bw",
+  CKO_H2Aub = "/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw",
+  ESC_CTR = "/Volumes/ZYChenlab/Shared_browser_tracks/Public_browser_tracks/2019_Klose_ESC/GSE161993_mESC_BAP1ff_UNT_H2AK119ub1_mm10.UniqMapped_sorted_rmdup_downsampled_MERGED.MACS2.bw",
+  ESC_IKO = "/Volumes/ZYChenlab/Shared_browser_tracks/Public_browser_tracks/2019_Klose_ESC/GSE161993_mESC_BAP1ff_TAM_H2AK119ub1_mm10.UniqMapped_sorted_rmdup_downsampled_MERGED.MACS2.bw"
+)
+
+bed.list <- list()
+for (sample in names(bed.file)){
+  bed.list[[sample]] <- import.bed(bed.file[[sample]])
+  bed.list[[sample]]$group <- rep(sample, length(bed.list[[sample]]))
+}
+
+bed.gr <- Reduce(c, bed.list)
+length(bed.gr) #1222410
+
+bed.gr <- bed.gr[width(bed.gr)>1]
+length(bed.gr) #122376
+
+tmp_matrix <-  matrix(0, ncol= length(bw), nrow=length(bed.gr))
+colnames(tmp_matrix) = names(bw)
+
+for(sample in names(bw)){
+  cat(paste0(sample,"\n"))
+  bw_file = bw[[sample]]
+  # calcPeaksSignal is defined in the R/utils.R file.
+  tmp_matrix[, sample] = calcPeaksSignal(bed.gr, bw_file)$meanScore
+}
+
+mcols(bed.gr) <- cbind(mcols(bed.gr), as.data.frame(tmp_matrix))
+bed.gr$log2FC_H2Aub <- log2(bed.gr$CKO_H2Aub + 0.1) - 
+                       log2(bed.gr$CTR_H2Aub + 0.1)
+bed.gr$log2FC_H2Aub_Klose <- log2(bed.gr$ESC_IKO + 0.1) - 
+                             log2(bed.gr$ESC_CTR + 0.1)
+saveRDS(bed.gr, "./R_output/250624_gene_feature_H2Aub_log2FC.rds")
+bed.gr <- readRDS("./R_output/250624_gene_feature_H2Aub_log2FC.rds")
+
+df4box <- as.data.frame(bed.gr)
+df4box$group <- factor(df4box$group, 
+                       levels = c("enhancer", "promoter", "body", "intergenic"))
+
+#Fig. 1k in manuscript. 
+pdf("./figures/250624_log2FC_H2Aub_over_genes_boxplot.pdf", width = 5, height = 5)
+ggplot(df4box, aes(x = group, y = log2FC_H2Aub)) + 
+  geom_boxplot(outlier.color = NA) +
+  ylab("Log2 FC (CKO / CTR)") + ylim(-4, 4) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  scale_x_discrete(
+      labels= c("Putative enhancer", "Promoter", "Gene body", "Intergenic")) +
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "none")
+
+ggplot(df4box, aes(x = group, y = log2FC_H2Aub_Klose)) + 
+  geom_boxplot(outlier.color = NA) +
+  ylab("Log2 FC (Inducible KO / CTR)") + ylim(-4, 4) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  scale_x_discrete(
+      labels= c("Putative enhancer", "Promoter", "Gene body", "Intergenic")) +
+  theme_cowplot(22) + 
+  theme(axis.title.x=element_blank(),
+  legend.title=element_blank(),
+  axis.text.x = element_text(angle=30, hjust=1, vjust=1),
+  legend.position = "none")
+dev.off()
+```
+### 4. H2Aub metaplot for Down/no Change genes
+
+```{r}
+suppressMessages(library(ChIPpeakAnno))
+suppressMessages(library(GenomicFeatures))
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(profileplyr))
+suppressMessages(library(circlize))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(EnrichedHeatmap))
+suppressMessages(library(readxl))
+
+#obtain down genes vs. unchanged genes
+gv_DESeq_rpkm <- read.csv("./R_output/250315_BAP1_gv_genes_DE_analyses.csv")
+
+gv_up <- gv_DESeq_rpkm[which(gv_DESeq_rpkm$gv_DESeq_rpkm.group == "up-regulated"),]
+gv_down <- gv_DESeq_rpkm[which(gv_DESeq_rpkm$gv_DESeq_rpkm.group == "down-regulated"),]
+gv_unchanged <- gv_DESeq_rpkm[which(gv_DESeq_rpkm$gv_DESeq_rpkm.group == "similar_level"),]
+summary(gv_unchanged$ctr_gv_1.rpkm)
+nrow(gv_up) #101
+nrow(gv_down) #827
+nrow(gv_unchanged) #12643
+
+gv_unchanged <- gv_unchanged[which((gv_unchanged$ctr_gv_1.rpkm + 
+                                   gv_unchanged$ctr_gv_2.rpkm) >=10), ]
+
+#obtain gene coordinates
+#mm10_gene_annotation <- makeTxDbFromGFF("/Volumes/ZYChenlab/Zhiyuan/genomes_annotations/mm10/annotations/gencode.vM25.annotation.gtf")
+#saveRDS(mm10_gene_annotation, "./R_output/250318_mm10_gene_annotation.rds")
+
+mm10_gene_annotation <- readRDS("./R_output/250318_mm10_gene_annotation.rds")
+mm10_genes <- genes(mm10_gene_annotation)
+
+#filter non-standard chr and blacklist regions
+mm10_genes <- mm10_genes[ !mm10_genes %over% mm10_blacklist]
+mm10_genes <- keepSeqlevels(mm10_genes, paste0("chr", c(1:19, "X")),
+                            pruning.mode = "coarse")
+
+length(mm10_genes) #50016
+
+mm10_genes_down <- mm10_genes[which(mm10_genes$gene_id %in% 
+                                    gv_down$id)]
+mm10_genes_unchanged <- mm10_genes[which(mm10_genes$gene_id %in% 
+                                    gv_unchanged$id)]
+length(mm10_genes_down) #827
+length(mm10_genes_unchanged) #6350
+
+#write output as bed file
+write.table(
+  data.frame(seqnames = seqnames(mm10_genes_down),
+             starts = start(mm10_genes_down) -1 ,
+             ends = end(mm10_genes_down),
+             names = mm10_genes_down$gene_id,
+             scores = ".",
+             strands = strand(mm10_genes_down)
+             ),
+  "./Deeptools/250317_H2Aub_at_down_unchange_gene_GV/250317_down_gene.bed", quote = F, 
+  sep = "\t", row.names = F, col.names = F
+)
+
+write.table(
+  data.frame(seqnames = seqnames(mm10_genes_unchanged),
+             starts = start(mm10_genes_unchanged) -1 ,
+             ends = end(mm10_genes_unchanged),
+             names = mm10_genes_unchanged$gene_id,
+             scores = ".",
+             strands = strand(mm10_genes_unchanged)
+             ),
+  "./Deeptools/250317_H2Aub_at_down_unchange_gene_GV/250317_unchange_gene.bed", quote = F, 
+  sep = "\t", row.names = F, col.names = F
+)
+```
+
+
+
+Run deeptools: refers to /Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250317_H2Aub_at_down_unchange_gene_GV/
+
+```{bash}
+CTR_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CTR_H2Aub_merged.bw"
+CKO_H2Aub="/data/ZYChenlab/Zhiyuan/projects/BAP1_project/250308_BAP1_GV_CR_reps_merged/bigwigs/GV_CKO_H2Aub.dedup.scaled.bw"
+
+computeMatrix scale-regions \
+        -S $CTR_H2Aub $CKO_H2Aub  \
+       -R 250317_down_gene.bed \
+        -a 2000 -b 2000 \
+        -m 4000 \
+        --outFileName 250317_H2Aub.GV.down.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel  'C_H2Aub' 'K_H2Aub' \
+        --outFileNameMatrix  250317_H2Aub.GV.down.matrix \
+        --missingDataAsZero \
+        --sortUsingSamples 1
+
+computeMatrix scale-regions \
+        -S $CTR_H2Aub $CKO_H2Aub  \
+        -R 250317_unchange_gene.bed \
+        -a 2000 -b 2000 \
+        -m 4000 \
+        --outFileName 250317_H2Aub.GV.unchange.mat.gz \
+        --sortRegions 'descend' \
+        --samplesLabel  'C_H2Aub' 'K_H2Aub' \
+        --outFileNameMatrix  250317_H2Aub.GV.unchange.matrix \
+        --missingDataAsZero \
+        --sortUsingSamples 1
+```
+
+
+```{r}
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
+
+#H2Aub domain-------------------
+H2Aub_down <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250317_H2Aub_at_down_unchange_gene_GV/250317_H2Aub.GV.down.mean.matrix", header = T)
+H2Aub_unchanged <- read.table("/Volumes/ZYChenlab/Zhiyuan/projects/BAP1_project/2025_main_analyses/Deeptools/250317_H2Aub_at_down_unchange_gene_GV/250317_H2Aub.GV.unchanged.mean.matrix", header = T)
+
+colnames(H2Aub_down) <- "mean"
+colnames(H2Aub_unchanged) <- "mean"
+
+H2Aub_down$group <- c(rep("CTR_down", 800), rep("CKO_down", 800))
+H2Aub_down$bp <- c(seq(1:800), seq(1:800))
+
+H2Aub_unchanged$group <- c(rep("CTR_unchange", 800), rep("CKO_unchange", 800))
+H2Aub_unchanged$bp <- c(seq(1:800), seq(1:800))
+
+df4plot <- rbind(H2Aub_down, H2Aub_unchanged)
+
+#Fig. 1M in manuscript
+pdf("./figures/250318_H2Aub_unchange_down_GV_metaplot.pdf", width = 6, height = 4)
+ggplot(df4plot, aes(x = bp, y = mean, color = group)) +
+  geom_line() + ylim(c(0,20)) + 
+  scale_color_manual(values = c("black", "grey", "red", "blue")) +
+  theme_cowplot(16) + ggtitle("GV H2Aub")
+dev.off()
+```
